@@ -15,15 +15,12 @@ import ssl
 import sys
 import tarfile
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cache
 from io import BytesIO
 from urllib.parse import urlparse
 
-import boto3
 import httpx
-from botocore.exceptions import ClientError
 from huggingface_hub import snapshot_download
 from PIL import Image
 from pypdf import PdfReader
@@ -39,17 +36,9 @@ from olmocr.image_utils import convert_image_to_pdf_bytes, is_jpeg, is_png
 from olmocr.metrics import MetricsKeeper, WorkerTracker
 from olmocr.prompts import PageResponse, build_no_anchoring_v4_yaml_prompt
 from olmocr.prompts.anchor import get_anchor_text
-from olmocr.s3_utils import (
-    download_directory,
-    download_zstd_csv,
-    expand_s3_glob,
-    get_s3_bytes,
-    get_s3_bytes_with_backoff,
-    parse_s3_path,
-)
 from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
-from olmocr.work_queue import LocalBackend, S3Backend, WorkQueue
+from olmocr.work_queue import LocalBackend, WorkQueue
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -71,10 +60,6 @@ server_logger.addHandler(console_handler)
 
 # Quiet logs from pypdf
 logging.getLogger("pypdf").setLevel(logging.ERROR)
-
-# Global s3 clients fo the whole script, we have two separate ones in case your workspace and your pdfs are in different accounts
-workspace_s3 = boto3.client("s3")
-pdf_s3 = boto3.client("s3")
 
 # Global variables for token statistics
 metrics = MetricsKeeper(window=60 * 5)
@@ -111,7 +96,7 @@ get_pdf_filter = cache(
 
 @dataclass(frozen=True)
 class PageResult:
-    s3_path: str
+    source_path: str
     page_num: int
     response: PageResponse
 
@@ -604,9 +589,11 @@ async def process_tarball(args, worker_id: int, tarball_path: str) -> list:
     """Process all PDFs inside a tarball concurrently and return list of Dolma documents."""
     logger.info(f"Worker {worker_id} processing tarball {tarball_path}")
 
-    tarball_bytes = await asyncio.to_thread(
-        lambda: get_s3_bytes_with_backoff(pdf_s3, tarball_path)
-    )
+    def _read_tarball():
+        with open(tarball_path, "rb") as f:
+            return f.read()
+
+    tarball_bytes = await asyncio.to_thread(_read_tarball)
 
     # Extract all PDFs to a temp directory
     temp_dir = tempfile.mkdtemp()
@@ -714,22 +701,21 @@ async def process_single_pdf(
 
 
 async def process_pdf(args, worker_id: int, pdf_orig_path: str):
-    """Process a single PDF from S3/local path and return a Dolma document."""
+    """Process a single PDF from local path and return a Dolma document."""
+    if not os.path.exists(pdf_orig_path):
+        logger.info(f"File not found, skipping {pdf_orig_path}")
+        return None
+
     with tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False) as tf:
         try:
-            data = await asyncio.to_thread(
-                lambda: get_s3_bytes_with_backoff(pdf_s3, pdf_orig_path)
-            )
+            data = await asyncio.to_thread(lambda: open(pdf_orig_path, "rb").read())
             tf.write(data)
             tf.flush()
-        except ClientError as ex:
-            if ex.response["Error"]["Code"] == "NoSuchKey":
-                logger.info(
-                    f"S3 File Not found, skipping it completely {pdf_orig_path}"
-                )
-                return None
-            else:
-                raise
+        except OSError as e:
+            logger.warning(f"Failed to read {pdf_orig_path}: {e}")
+            if os.path.exists(tf.name):
+                os.unlink(tf.name)
+            return None
 
         if is_png(tf.name) or is_jpeg(tf.name):
             logger.info(f"Converting {pdf_orig_path} from image to PDF format...")
@@ -815,7 +801,7 @@ def get_markdown_path(workspace: str, source_file: str) -> str:
 
     Args:
         workspace: The workspace directory path
-        source_file: The original source file path (can be S3, local, or tarball::internal_path)
+        source_file: The original source file path (local path or tarball::internal_path)
 
     Returns:
         The full path where the markdown file should be written
@@ -828,10 +814,6 @@ def get_markdown_path(workspace: str, source_file: str) -> str:
         if tarball_basename.endswith(".tar"):
             tarball_basename = tarball_basename[:-4]
         relative_path = os.path.join(tarball_basename, internal_path)
-    elif source_file.startswith("s3://"):
-        # Extract the path after the bucket name for S3 sources
-        parsed = urlparse(source_file)
-        relative_path = parsed.path.lstrip("/")
     else:
         # For local files, strip leading slash to make it relative
         relative_path = source_file.lstrip("/")
@@ -913,29 +895,9 @@ async def worker(args, work_queue: WorkQueue, worker_id):
 
                     markdown_path = get_markdown_path(args.workspace, source_file)
                     markdown_dir = os.path.dirname(markdown_path)
-
-                    # Create the directory structure if it doesn't exist
-                    if markdown_path.startswith("s3://"):
-                        # For S3 paths, we'll create a temporary file and upload it
-                        with tempfile.NamedTemporaryFile(
-                            mode="w+", delete=False
-                        ) as md_tf:
-                            md_tf.write(natural_text)
-                            md_tf.flush()
-                            md_temp_path = md_tf.name
-
-                        try:
-                            md_bucket, md_key = parse_s3_path(markdown_path)
-                            workspace_s3.upload_file(md_temp_path, md_bucket, md_key)
-                        finally:
-                            # Make sure to clean up the temporary file even if upload fails
-                            if os.path.exists(md_temp_path):
-                                os.unlink(md_temp_path)
-                    else:
-                        # For local paths, create the directory structure and write the file
-                        os.makedirs(markdown_dir, exist_ok=True)
-                        with open(markdown_path, "w") as md_f:
-                            md_f.write(natural_text)
+                    os.makedirs(markdown_dir, exist_ok=True)
+                    with open(markdown_path, "w") as md_f:
+                        md_f.write(natural_text)
 
             # Update finished token counts from successful documents
             metrics.add_metrics(
@@ -1121,23 +1083,7 @@ async def vllm_server_ready(args):
 async def download_model(model_name_or_path: str, max_retries: int = 5):
     for retry in range(max_retries):
         try:
-            if (
-                model_name_or_path.startswith("s3://")
-                or model_name_or_path.startswith("gs://")
-                or model_name_or_path.startswith("weka://")
-            ):
-                logger.info(f"Downloading model directory from '{model_name_or_path}'")
-                model_cache_dir = os.path.join(
-                    os.path.expanduser("~"), ".cache", "olmocr", "model"
-                )
-                # Delete existing model cache directory if it exists
-                if os.path.exists(model_cache_dir):
-                    shutil.rmtree(model_cache_dir)
-                download_directory([model_name_or_path], model_cache_dir)
-                return model_cache_dir
-            elif os.path.isabs(model_name_or_path) and os.path.isdir(
-                model_name_or_path
-            ):
+            if os.path.isabs(model_name_or_path) and os.path.isdir(model_name_or_path):
                 logger.info(f"Using local model path at '{model_name_or_path}'")
                 return model_name_or_path
             else:
@@ -1166,325 +1112,27 @@ async def metrics_reporter(work_queue):
         await asyncio.sleep(10)
 
 
-def submit_beaker_job(args):
-    from beaker import (  # type: ignore
-        Beaker,
-        BeakerConstraints,
-        BeakerEnvVar,
-        BeakerExperimentSpec,
-        BeakerImageSource,
-        BeakerJobPriority,
-        BeakerResultSpec,
-        BeakerRetrySpec,
-        BeakerTaskContext,
-        BeakerTaskResources,
-        BeakerTaskSpec,
-    )
-    from beaker.exceptions import BeakerSecretNotFound
-
-    Beaker.TIMEOUT = 60
-    b = Beaker.from_env(default_workspace=args.beaker_workspace)
-    owner = b.user_name
-    beaker_image = f"jakep/olmocr-inference-{VERSION}"
-
-    task_name = f"olmocr-{os.path.basename(args.workspace.rstrip('/'))}"
-
-    # Take out --beaker flag so the workers will just run things
-    args_list = [arg for arg in sys.argv[1:] if arg != "--beaker"]
-
-    # Take out the --pdfs [arg] or --pdfs=[arg], since the queue is populated locally
-    args_list = [
-        arg
-        for i, arg in enumerate(args_list)
-        if not (arg.startswith("--pdfs") or (i > 0 and args_list[i - 1] == "--pdfs"))
-    ]
-
-    try:
-        b.secret.get(f"{owner}-WEKA_ACCESS_KEY_ID")
-        b.secret.get(f"{owner}-WEKA_SECRET_ACCESS_KEY")
-        b.secret.get(f"{owner}-AWS_CREDENTIALS_FILE")
-    except BeakerSecretNotFound:
-        print(
-            f"Expected beaker secrets for accessing Weka and S3 are not found. Are you okay to write those to your beaker workspace {args.beaker_workspace}? [y/n]"
-        )
-
-        if input().strip().lower() != "y":
-            print("Exiting...")
-            sys.exit(1)
-
-        b.secret.write(
-            f"{owner}-WEKA_ACCESS_KEY_ID", os.environ.get("WEKA_ACCESS_KEY_ID", "")
-        )
-        b.secret.write(
-            f"{owner}-WEKA_SECRET_ACCESS_KEY",
-            os.environ.get("WEKA_SECRET_ACCESS_KEY", ""),
-        )
-        b.secret.write(
-            f"{owner}-AWS_CREDENTIALS_FILE",
-            open(os.path.join(os.path.expanduser("~"), ".aws", "credentials")).read(),
-        )
-
-    env_var_secrets = [
-        BeakerEnvVar(name="WEKA_ACCESS_KEY_ID", secret=f"{owner}-WEKA_ACCESS_KEY_ID"),
-        BeakerEnvVar(
-            name="WEKA_SECRET_ACCESS_KEY", secret=f"{owner}-WEKA_SECRET_ACCESS_KEY"
-        ),
-        BeakerEnvVar(
-            name="AWS_CREDENTIALS_FILE", secret=f"{owner}-AWS_CREDENTIALS_FILE"
-        ),
-    ]
-
-    try:
-        b.secret.get("OLMOCR_PREVIEW_HF_TOKEN")
-        env_var_secrets.append(
-            BeakerEnvVar(name="HF_TOKEN", secret="OLMOCR_PREVIEW_HF_TOKEN")
-        )
-    except BeakerSecretNotFound:
-        pass
-
-    try:
-        b.secret.get("OE_DATA_GCS_SA_KEY")
-        env_var_secrets.append(
-            BeakerEnvVar(
-                name="GOOGLE_APPLICATION_CREDENTIALS_FILE", secret="OE_DATA_GCS_SA_KEY"
-            )
-        )
-    except BeakerSecretNotFound:
-        print(
-            "Input the olmo-gcs SA key if you would like to load weights from gcs (end with a double newline):"
-        )
-        lines = []
-        prev_empty = False
-        for line in iter(input, None):
-            if not line and prev_empty:
-                break
-            prev_empty = not line
-            lines.append(line)
-        gcs_sa_key = "\n".join(lines[:-1]).strip()  # Remove the last empty line
-        if gcs_sa_key:
-            b.secret.write("OE_DATA_GCS_SA_KEY", gcs_sa_key)
-            env_var_secrets.append(
-                BeakerEnvVar(
-                    name="GOOGLE_APPLICATION_CREDENTIALS_FILE",
-                    secret="OE_DATA_GCS_SA_KEY",
-                )
-            )
-
-    # Create the experiment spec
-    experiment_spec = BeakerExperimentSpec(
-        budget="ai2/oe-base",
-        description=task_name,
-        tasks=[
-            BeakerTaskSpec(
-                name=task_name,
-                propagate_failure=False,
-                propagate_preemption=False,
-                replicas=args.beaker_gpus,
-                context=BeakerTaskContext(
-                    priority=BeakerJobPriority[args.beaker_priority],
-                    preemptible=True,
-                ),
-                image=BeakerImageSource(beaker=beaker_image),
-                command=["python", "-m", "olmocr.pipeline"] + args_list,
-                env_vars=[
-                    BeakerEnvVar(name="BEAKER_JOB_NAME", value=task_name),
-                    BeakerEnvVar(name="OWNER", value=owner),
-                    BeakerEnvVar(name="HF_HUB_OFFLINE", value="1"),
-                ]
-                + env_var_secrets,
-                resources=BeakerTaskResources(
-                    gpu_count=1, memory="125GB"
-                ),  # Have to set a memory limit, otherwise VLLM may use too much on its own
-                constraints=BeakerConstraints(
-                    cluster=(
-                        args.beaker_cluster
-                        if isinstance(args.beaker_cluster, list)
-                        else [args.beaker_cluster]
-                    )
-                ),
-                result=BeakerResultSpec(path="/noop-results"),
-            )
-        ],
-        retry=BeakerRetrySpec(allowed_task_retries=10),
-    )
-
-    workload = b.experiment.create(spec=experiment_spec)
-
-    print(f"Experiment URL: https://beaker.org/ex/{workload.experiment.id}")
-
-
-def print_stats(args, root_work_queue):
-    LONG_CONTEXT_THRESHOLD = 32768
-    assert args.workspace.startswith(
-        "s3://"
-    ), "Printing stats functionality only works with s3 workspaces for now."
-
-    done_work_items = expand_s3_glob(
-        workspace_s3, os.path.join(args.workspace, "results", "*.jsonl")
-    )
-    work_queue_lines = download_zstd_csv(
-        workspace_s3, os.path.join(args.workspace, "work_index_list.csv.zstd")
-    )
-    work_queue = {
-        parts[0]: parts[1:]
-        for line in work_queue_lines
-        if line.strip() and (parts := root_work_queue._decode_csv_row(line.strip()))
-    }
-
-    total_items, completed_items = len(work_queue), len(done_work_items)
-
-    def process_output_file(s3_path):
-        try:
-            stats = {
-                "docs": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "pages": 0,
-                "fallback_pages": 0,
-                "long_docs": 0,
-                "long_tokens": 0,
-                "en_docs": 0,
-                "en_tokens": 0,
-            }
-            paths = set()
-            for line in (
-                get_s3_bytes(workspace_s3, s3_path).decode("utf-8").splitlines()
-            ):
-                if not line.strip():
-                    continue
-                doc = json.loads(line)
-                meta, attrs = doc["metadata"], doc.get("attributes", {})
-                out_tokens = meta.get("total-output-tokens", 0)
-                stats["docs"] += 1
-                stats["input_tokens"] += meta.get("total-input-tokens", 0)
-                stats["output_tokens"] += out_tokens
-                stats["pages"] += meta.get("pdf-total-pages", 0)
-                stats["fallback_pages"] += meta.get("total-fallback-pages", 0)
-                paths.add(meta["Source-File"])
-                if out_tokens > LONG_CONTEXT_THRESHOLD:
-                    stats["long_docs"] += 1
-                    stats["long_tokens"] += out_tokens
-                langs = attrs.get("primary_language", [])
-                if langs and sum(1 for ln in langs if ln == "en") > len(langs) / 2:
-                    stats["en_docs"] += 1
-                    stats["en_tokens"] += out_tokens
-            return stats, paths
-        except Exception as e:
-            logger.warning(f"Error processing {s3_path}: {e}")
-            return {
-                k: 0
-                for k in [
-                    "docs",
-                    "input_tokens",
-                    "output_tokens",
-                    "pages",
-                    "fallback_pages",
-                    "long_docs",
-                    "long_tokens",
-                    "en_docs",
-                    "en_tokens",
-                ]
-            }, set()
-
-    print(
-        f"\nCompleted work items {completed_items:,} out of {total_items:,}: {completed_items/total_items*100:.2f}%"
-    )
-    print("\nProcessing output files...")
-
-    totals = {
-        "docs": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "pages": 0,
-        "fallback_pages": 0,
-        "long_docs": 0,
-        "long_tokens": 0,
-        "en_docs": 0,
-        "en_tokens": 0,
-    }
-    all_processed, original_paths = set(), set()
-
-    for item in done_work_items:
-        if (match := re.search(r"output_(\w+).jsonl", item)) and match.group(
-            1
-        ) in work_queue:
-            original_paths.update(work_queue[match.group(1)])
-
-    with ThreadPoolExecutor() as executor:
-        for stats, paths in tqdm(
-            executor.map(process_output_file, done_work_items),
-            total=len(done_work_items),
-        ):
-            for k in totals:
-                totals[k] += stats[k]
-            all_processed.update(paths)
-
-    d, p, o, c = (
-        totals["docs"],
-        totals["pages"],
-        totals["output_tokens"],
-        max(1, completed_items),
-    )
-    print(
-        f"""
-Work Items Status:
-Total work items: {total_items:,}
-Completed items: {completed_items:,}
-Remaining items: {total_items - completed_items:,}
-
-Results:
-Total documents processed: {d:,}
-Total documents skipped: {len(original_paths - all_processed):,}
-Total pages on fallback: {totals['fallback_pages']:,}
-Total pages processed: {p:,}
-
-Total output tokens: {o:,}
-Projected output tokens: {round(o / c * total_items):,}
-
-Average pages per doc: {p / max(1, d):,.1f}
-Average output tokens per doc: {o / max(1, d):,.1f}
-Average output tokens per page: {o / max(1, p):,.1f}
-
-Long Context Documents (>{LONG_CONTEXT_THRESHOLD} tokens): {totals['long_docs']:,}
-Total tokens in long context documents: {totals['long_tokens']:,}
-
-English-only documents (>50% pages with 'en'): {totals['en_docs']:,}
-Total output tokens in English-only documents: {totals['en_tokens']:,}
-Projected English-only output tokens: {round(totals['en_tokens'] / c * total_items):,}"""
-    )
-
-
 async def main():
     parser = argparse.ArgumentParser(
         description="Manager for running millions of PDFs through a batch inference pipeline."
     )
     parser.add_argument(
         "workspace",
-        help="The filesystem path where work will be stored, can be a local folder, or an s3 path if coordinating work with many workers, s3://bucket/prefix/ ",
+        help="Local filesystem path where work will be stored.",
     )
     parser.add_argument(
         "--pdfs",
         nargs="*",
-        help="Path to add pdfs stored in s3 to the workspace, can be a glob path s3://bucket/prefix/*.pdf or path to file containing list of pdf paths",
+        help="Local paths to add to the workspace: PDF/image files, .tar.gz tarballs, or a .txt file listing paths (one per line).",
         default=None,
     )
     parser.add_argument(
         "--model",
-        help="Path where the model is located, allenai/olmOCR-2-7B-1025-FP8 is the default, can be local, s3, or hugging face.",
+        help="Path where the model is located (local directory or Hugging Face repo). Default: allenai/olmOCR-2-7B-1025-FP8",
         default="allenai/olmOCR-2-7B-1025-FP8",
     )
 
     # More detailed config options, usually you shouldn't have to change these
-    parser.add_argument(
-        "--workspace_profile",
-        help="S3 configuration profile for accessing the workspace",
-        default=None,
-    )
-    parser.add_argument(
-        "--pdf_profile",
-        help="S3 configuration profile for accessing the raw pdf documents",
-        default=None,
-    )
     parser.add_argument(
         "--pages_per_group",
         type=int,
@@ -1522,11 +1170,6 @@ async def main():
         "--apply_filter",
         action="store_true",
         help="Apply basic filtering to English pdfs which are not forms, and not likely seo spam",
-    )
-    parser.add_argument(
-        "--stats",
-        action="store_true",
-        help="Instead of running any job, reports some statistics about the current workspace",
     )
     parser.add_argument(
         "--markdown",
@@ -1608,31 +1251,6 @@ async def main():
         "--port", type=int, default=30024, help="Port to use for the VLLM server"
     )
 
-    # Beaker/job running stuff
-    beaker_group = parser.add_argument_group("beaker/cluster execution")
-    beaker_group.add_argument(
-        "--beaker",
-        action="store_true",
-        help="Submit this job to beaker instead of running locally",
-    )
-    beaker_group.add_argument(
-        "--beaker_workspace", help="Beaker workspace to submit to", default="ai2/olmocr"
-    )
-    beaker_group.add_argument(
-        "--beaker_cluster",
-        help="Beaker clusters you want to run on",
-        default=["ai2/jupiter", "ai2/ceres", "ai2/neptune", "ai2/saturn"],
-    )
-    beaker_group.add_argument(
-        "--beaker_gpus", type=int, default=1, help="Number of gpu replicas to run"
-    )
-    beaker_group.add_argument(
-        "--beaker_priority",
-        type=str,
-        default="normal",
-        help="Beaker priority level for the job",
-    )
-
     args, unknown_args = parser.parse_known_args()
 
     # Set up file logging if enabled
@@ -1650,58 +1268,21 @@ async def main():
     )
 
     use_internal_server = not args.server
-    global workspace_s3, pdf_s3, max_concurrent_requests_limit
+    global max_concurrent_requests_limit
 
     max_concurrent_requests_limit = asyncio.BoundedSemaphore(
         args.max_concurrent_requests
     )
 
-    # setup the job to work in beaker environment, load secrets, adjust logging, etc.
-    if "BEAKER_JOB_NAME" in os.environ:
-        cred_path = os.path.join(os.path.expanduser("~"), ".aws", "credentials")
-        os.makedirs(os.path.dirname(cred_path), exist_ok=True)
-        with open(cred_path, "w") as f:
-            f.write(os.environ.get("AWS_CREDENTIALS_FILE"))
-        cred_path = os.path.join(os.path.expanduser("~"), ".gcs", "credentials")
-        os.makedirs(os.path.dirname(cred_path), exist_ok=True)
-        with open(cred_path, "w") as f:
-            f.write(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_FILE"))
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cred_path
-        workspace_s3 = boto3.client("s3")
-        pdf_s3 = boto3.client("s3")
-
-        # Wait a little bit so that not all beaker jobs in a task start at the same time and download the model at the same time
-        replica_count = int(os.environ.get("BEAKER_REPLICA_COUNT", "1"))
-        interval = (
-            10 if (replica_count - 1) * 10 <= 30 else 30 / max(1, replica_count - 1)
-        )
-        sleep_time = int(os.environ.get("BEAKER_REPLICA_RANK", "0")) * interval
-        logger.info(
-            f"Beaker job sleeping for {sleep_time} seconds to stagger model downloads"
-        )
-        await asyncio.sleep(sleep_time)
-
-    # If you specify an API key, meaning you are on a remote provider, then lower the group size default, not to overwhelm such servers
-    # and not to waste money if a group doesn't finish right away
+    # If you specify an API key (remote provider), use smaller group size
     if not hasattr(args, "pages_per_group"):
         args.pages_per_group = 50 if args.api_key is not None else 500
-
-    if args.workspace_profile:
-        workspace_session = boto3.Session(profile_name=args.workspace_profile)
-        workspace_s3 = workspace_session.client("s3")
-
-    if args.pdf_profile:
-        pdf_session = boto3.Session(profile_name=args.pdf_profile)
-        pdf_s3 = pdf_session.client("s3")
 
     # We need poppler to load the initial pdfs, even if we are not processing them here
     check_poppler_version()
 
-    # Create work queue
-    if args.workspace.startswith("s3://"):
-        work_queue = WorkQueue(S3Backend(workspace_s3, args.workspace))
-    else:
-        work_queue = WorkQueue(LocalBackend(args.workspace))
+    # Create work queue (local only)
+    work_queue = WorkQueue(LocalBackend(args.workspace))
 
     if args.pdfs:
         logger.info("Got --pdfs argument, going to add to the work queue")
@@ -1709,15 +1290,7 @@ async def main():
         tarball_paths = set()
 
         for pdf_path in args.pdfs:
-            # Expand s3 glob paths first, then categorize results
-            if pdf_path.startswith("s3://"):
-                logger.info(f"Expanding s3 glob at {pdf_path}")
-                expanded_paths = set(expand_s3_glob(pdf_s3, pdf_path))
-                tarball_paths.update(p for p in expanded_paths if is_tarball_path(p))
-                pdf_work_paths.update(
-                    p for p in expanded_paths if not is_tarball_path(p)
-                )
-            elif os.path.exists(pdf_path):
+            if os.path.exists(pdf_path):
                 # Check if this is a tar.gz file (local)
                 if is_tarball_path(pdf_path):
                     tarball_paths.add(pdf_path)
@@ -1745,7 +1318,7 @@ async def main():
                     raise ValueError(f"Unsupported file extension for {pdf_path}")
             else:
                 raise ValueError(
-                    "pdfs argument needs to be either a local path, an s3 path, or an s3 glob pattern..."
+                    f"pdfs path does not exist or is unsupported: {pdf_path}"
                 )
 
         logger.info(
@@ -1763,15 +1336,22 @@ async def main():
                 sampled_pdfs, desc="Sampling PDFs to calculate optimal length"
             ):
                 try:
-                    # Download the PDF to a temp file
-                    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_file:
-                        tmp_file.write(get_s3_bytes(pdf_s3, pdf))
+                    with open(pdf, "rb") as f:
+                        data = f.read()
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".pdf", delete=False
+                    ) as tmp_file:
+                        tmp_file.write(data)
                         tmp_file.flush()
-                        if is_png(tmp_file.name) or is_jpeg(tmp_file.name):
+                        tmp_path = tmp_file.name
+                    try:
+                        if is_png(tmp_path) or is_jpeg(tmp_path):
                             page_counts.append(1)
                         else:
-                            reader = PdfReader(tmp_file.name)
+                            reader = PdfReader(tmp_path)
                             page_counts.append(len(reader.pages))
+                    finally:
+                        os.unlink(tmp_path)
                 except Exception as e:
                     logger.warning(f"Failed to read {pdf}: {e}")
 
@@ -1794,14 +1374,6 @@ async def main():
         # Add tarballs to the queue - each tarball is one work item
         if tarball_paths:
             await work_queue.populate_queue(tarball_paths, 1)
-
-    if args.stats:
-        print_stats(args, work_queue)
-        return
-
-    if args.beaker:
-        submit_beaker_job(args)
-        return
 
     # If you get this far, then you are doing inference and need a GPU
     # check_sglang_version()

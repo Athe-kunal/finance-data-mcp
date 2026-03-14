@@ -1,8 +1,8 @@
-import asyncio
 import glob
 import os
 import sys
 from pathlib import Path
+from filings.ocr.olmocr_pipeline import main
 
 DEFAULT_SERVER = os.environ.get("OLMOCR_SERVER", "http://localhost:8000/v1")
 DEFAULT_MODEL = "allenai/olmOCR-2-7B-1025-FP8"
@@ -30,7 +30,5 @@ async def run(
         "--pdfs",
         *pdfs,
     ]
-
-    from src.ocr.olmocr_pipeline import main
 
     await main()
