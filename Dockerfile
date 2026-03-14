@@ -27,10 +27,12 @@ RUN uv sync --frozen
 # Copy the rest of the source (filtered by .dockerignore)
 COPY . .
 
+RUN chmod +x /app/entrypoint.sh
+
 RUN mkdir -p /app/sec_data /app/localworkspace
 
 VOLUME ["/app/sec_data", "/app/localworkspace"]
 
-EXPOSE 8081
+EXPOSE 8000 8081
 
-CMD ["make", "start-server"]
+ENTRYPOINT ["/app/entrypoint.sh"]
