@@ -1,4 +1,4 @@
-# olmocr-sec-filings
+# SEC-filings-Markdown
 
 ## Configuration
 
@@ -82,6 +82,11 @@ playwright install chromium
 Start vLLM server:
 ```bash
 make vllm-olmocr-serve
+```
+
+Benchmark vLLM with guidellm (start the vLLM server first, then in another terminal):
+```bash
+make guidellm-benchmark
 ```
 
 Fetch SEC filings:
