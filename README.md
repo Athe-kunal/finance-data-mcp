@@ -12,16 +12,6 @@ Settings are loaded via Pydantic Settings from environment variables or a `.env`
 | `OLMOCR_MODEL` | Model name for olmOCR | `allenai/olmOCR-2-7B-1025-FP8` |
 | `OLMOCR_WORKSPACE` | Workspace directory for OCR output | `./localworkspace` |
 
-Import the singleton `settings` instance:
-
-```python
-from settings import settings
-
-company = settings.sec_api_organization
-email = settings.sec_api_email
-server = settings.olmocr_server
-```
-
 ## Docker
 
 ### Build
