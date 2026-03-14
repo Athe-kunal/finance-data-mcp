@@ -123,12 +123,6 @@ class DownloadedFiling(NamedTuple):
     output_path: Path
 
 
-def _render_pdf(html_content: str, base_url: str, output_path: Path) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    weasyprint.HTML(string=html_content, base_url=base_url).write_pdf(str(output_path))
-    return output_path
-
-
 def _download_filing_html(
     filing: FilingToSave,
     headers: dict[str, str],
@@ -141,14 +135,6 @@ def _download_filing_html(
         html_content=response.text,
         base_url=url,
         output_path=output_path,
-    )
-
-
-def _render_downloaded_filing(downloaded_filing: DownloadedFiling) -> Path:
-    return _render_pdf(
-        downloaded_filing.html_content,
-        downloaded_filing.base_url,
-        downloaded_filing.output_path,
     )
 
 
@@ -191,29 +177,32 @@ async def download_filings_html_contents(
     return [filing for filing in downloaded_filings if filing is not None]
 
 
-async def render_filings_to_pdfs(
+def _render_pdf(html_content: str, base_url: str, output_path: Path) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    weasyprint.HTML(string=html_content, base_url=base_url).write_pdf(str(output_path))
+    return output_path
+
+
+def _render_downloaded_filing(downloaded_filing: DownloadedFiling) -> Path:
+    return _render_pdf(
+        downloaded_filing.html_content,
+        downloaded_filing.base_url,
+        downloaded_filing.output_path,
+    )
+
+
+def render_filings_to_pdfs(
     downloaded_filings: list[DownloadedFiling],
-    max_workers: Optional[int] = None,
+    max_workers: Optional[int] = 8,
 ) -> list[Path]:
     """Render downloaded filing HTML to PDFs using a process pool."""
     if not downloaded_filings:
         return []
-
-    worker_count = max_workers or min(len(downloaded_filings), os.cpu_count() or 1)
-    loop = asyncio.get_running_loop()
-
+    worker_count = max_workers or min(
+        len(downloaded_filings), (os.cpu_count() or 1) // 2
+    )
     with ProcessPoolExecutor(max_workers=worker_count) as executor:
-        render_tasks = []
-        for downloaded_filing in downloaded_filings:
-            logger.info(f"Rendering -> {downloaded_filing.output_path}")
-            render_tasks.append(
-                loop.run_in_executor(
-                    executor,
-                    _render_downloaded_filing,
-                    downloaded_filing,
-                )
-            )
-        results = await asyncio.gather(*render_tasks)
+        results = list(executor.map(_render_downloaded_filing, downloaded_filings))
 
     for pdf_path in results:
         logger.info(f"Saved PDF: {pdf_path}")
@@ -243,6 +232,6 @@ async def save_filings_as_pdfs(
         email=email,
         max_concurrent=max_concurrent,
     )
-    return await render_filings_to_pdfs(
+    return render_filings_to_pdfs(
         downloaded_filings=downloaded_filings,
     )
