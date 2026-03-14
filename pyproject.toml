@@ -8,5 +8,5 @@ dependencies = [
     "loguru>=0.7.3",
     "olmocr>=0.4.27",
     "ratelimit>=2.2.1",
-    "weasyprint>=68.1",
+    "playwright>=1.49",
 ]

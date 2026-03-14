@@ -7,7 +7,7 @@ from typing import NamedTuple
 
 from loguru import logger
 
-from filings import utils, sec_data
+from filings import utils
 
 
 class SecResults(NamedTuple):
@@ -148,4 +148,4 @@ async def sec_main(
 
 
 if __name__ == "__main__":
-    data = asyncio.run(sec_main(ticker="GOOG", year="2025"))
+    data = asyncio.run(sec_main(ticker="NVDA", year="2025"))

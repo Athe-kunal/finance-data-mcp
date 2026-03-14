@@ -1,13 +1,12 @@
 import re
 import asyncio
-from concurrent.futures import ProcessPoolExecutor
 import requests
 from typing import Final, NamedTuple, Optional, Union
 from pathlib import Path
 import os
 from loguru import logger
 from ratelimit import limits, sleep_and_retry
-import weasyprint
+from playwright.async_api import async_playwright, Browser
 
 SEC_ARCHIVE_URL: Final[str] = "https://www.sec.gov/Archives/edgar/data"
 SEC_VIEWER_URL: Final[str] = "https://www.sec.gov/ix?doc=/Archives/edgar/data"
@@ -177,36 +176,54 @@ async def download_filings_html_contents(
     return [filing for filing in downloaded_filings if filing is not None]
 
 
-def _render_pdf(html_content: str, base_url: str, output_path: Path) -> Path:
+async def _render_pdf_with_browser(
+    browser: Browser,
+    downloaded_filing: DownloadedFiling,
+    sem: asyncio.Semaphore,
+) -> Optional[Path]:
+    """Render a single filing's HTML to PDF using a Playwright browser page."""
+    output_path = downloaded_filing.output_path
+    if output_path.exists():
+        logger.info(f"Skipping existing PDF: {output_path}")
+        return output_path
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    weasyprint.HTML(string=html_content, base_url=base_url).write_pdf(str(output_path))
-    return output_path
+    async with sem:
+        page = await browser.new_page()
+        try:
+            await page.set_content(
+                downloaded_filing.html_content,
+                wait_until="networkidle",
+            )
+            await page.pdf(path=str(output_path), format="Letter", print_background=True)
+            logger.info(f"Saved PDF: {output_path}")
+            return output_path
+        except Exception as exc:
+            logger.error(f"Failed rendering PDF {output_path}: {exc}")
+            return None
+        finally:
+            await page.close()
 
 
-def _render_downloaded_filing(downloaded_filing: DownloadedFiling) -> Path:
-    return _render_pdf(
-        downloaded_filing.html_content,
-        downloaded_filing.base_url,
-        downloaded_filing.output_path,
-    )
-
-
-def render_filings_to_pdfs(
+async def render_filings_to_pdfs(
     downloaded_filings: list[DownloadedFiling],
-    max_workers: Optional[int] = 8,
+    max_concurrent: int = 4,
 ) -> list[Path]:
-    """Render downloaded filing HTML to PDFs using a process pool."""
+    """Render downloaded filing HTML to PDFs using headless Chromium via Playwright."""
     if not downloaded_filings:
         return []
-    worker_count = max_workers or min(
-        len(downloaded_filings), (os.cpu_count() or 1) // 2
-    )
-    with ProcessPoolExecutor(max_workers=worker_count) as executor:
-        results = list(executor.map(_render_downloaded_filing, downloaded_filings))
 
-    for pdf_path in results:
-        logger.info(f"Saved PDF: {pdf_path}")
-    return list(results)
+    sem = asyncio.Semaphore(max_concurrent)
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        tasks = [
+            _render_pdf_with_browser(browser, filing, sem)
+            for filing in downloaded_filings
+        ]
+        results = await asyncio.gather(*tasks)
+        await browser.close()
+
+    return [path for path in results if path is not None]
 
 
 async def save_filings_as_pdfs(
@@ -215,7 +232,7 @@ async def save_filings_as_pdfs(
     email: str,
     max_concurrent: int = 16,
 ) -> list[Path]:
-    """Render each filing's primary .htm document to PDF via WeasyPrint.
+    """Render each filing's primary .htm document to PDF via headless Chromium.
 
     Args:
         filings: List of FilingToSave named tuples.
@@ -224,7 +241,7 @@ async def save_filings_as_pdfs(
         max_concurrent: Maximum number of simultaneous HTML downloads.
 
     Returns:
-        List of Path objects pointing to the saved PDFs (same order as input).
+        List of Path objects pointing to the saved PDFs.
     """
     downloaded_filings = await download_filings_html_contents(
         filings=filings,
@@ -232,6 +249,6 @@ async def save_filings_as_pdfs(
         email=email,
         max_concurrent=max_concurrent,
     )
-    return render_filings_to_pdfs(
+    return await render_filings_to_pdfs(
         downloaded_filings=downloaded_filings,
     )
