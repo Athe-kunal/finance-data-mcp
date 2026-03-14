@@ -4,27 +4,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PATH="/root/.local/bin:$PATH" \
-    OLMOCR_WORKSPACE=/app/localworkspace \
-    CUDA_VISIBLE_DEVICES=0
+    OLMOCR_WORKSPACE=/app/localworkspace
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl \
-        make \
-        ca-certificates \
+    curl \
+    make \
+    ca-certificates \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 WORKDIR /app
 
-# Copy dependency files first to leverage layer caching
 COPY pyproject.toml uv.lock ./
 
-# uv reads requires-python = ">=3.13" from pyproject.toml and manages the interpreter
-RUN uv sync --frozen
+# Increase ulimit to avoid "Too many open files" during bytecode compilation of many packages
+RUN ulimit -n 65536 && uv sync --frozen && uv run playwright install chromium --with-deps
 
-# Copy the rest of the source (filtered by .dockerignore)
 COPY . .
 
 RUN chmod +x /app/entrypoint.sh

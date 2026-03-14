@@ -30,18 +30,45 @@ server = settings.olmocr_server
 docker build -t sec-filings-md .
 ```
 
+Or via Makefile:
+
+```bash
+make docker-build
+```
+
 ### Run
 
 ```bash
-docker run --gpus device=${CUDA_VISIBLE_DEVICES:-3} \
+GPU_DEVICE=${GPU_DEVICE:-3}
+docker run --gpus device=${GPU_DEVICE} \
   -e SEC_API_ORGANIZATION="Your-Organization" \
   -e SEC_API_EMAIL="your-email@example.com" \
-  -e OLMOCR_SERVER="http://host.docker.internal:8000/v1" \
-  -e CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-3} \
   -v ./sec_data:/app/sec_data \
   -v ./localworkspace:/app/localworkspace \
   -p 8081:8081 \
   sec-filings-md
+```
+
+Or via Makefile (build + run in one step):
+
+```bash
+make docker-start
+```
+
+Makefile overrides:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `IMAGE_NAME` | Docker image name | `sec-filings-md` |
+| `GPU_DEVICE` | GPU device index | `0` |
+| `API_PORT` | Host port for API | `8081` |
+| `SEC_API_ORGANIZATION` | SEC API User-Agent org | `Your-Organization` |
+| `SEC_API_EMAIL` | SEC API contact email | `your-email@example.com` |
+
+Example with overrides:
+
+```bash
+make docker-start GPU_DEVICE=3 SEC_API_EMAIL="you@example.com"
 ```
 
 The two volumes persist data across container restarts:

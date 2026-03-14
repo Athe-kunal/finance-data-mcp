@@ -7,6 +7,10 @@ DATA_PARALLEL_SIZE     ?= 1
 PORT                   ?= 8000
 API_PORT               ?= 8081
 SERVER                 ?= localhost
+IMAGE_NAME             ?= sec-filings-md
+GPU_DEVICE             ?= 0
+SEC_API_ORGANIZATION   ?= Your-Organization
+SEC_API_EMAIL          ?= your-email@example.com
 
 .PHONY: vllm-olmocr-serve
 vllm-olmocr-serve:
@@ -23,7 +27,7 @@ vllm-olmocr-serve:
 
 .PHONY: start-server
 start-server:
-	uv run uvicorn server:app --reload --port $(API_PORT)
+	uv run uvicorn server:app --host 0.0.0.0 --reload --port $(API_PORT)
 
 .PHONY: guidellm-benchmark
 guidellm-benchmark:
@@ -34,3 +38,20 @@ guidellm-benchmark:
 		--rate 20 \
 		--data "prompt_tokens=300,output_tokens=2048" \
 		--output-path benchmark.yaml
+
+.PHONY: docker-build
+docker-build:
+	docker build -t $(IMAGE_NAME) .
+
+.PHONY: docker-run
+docker-run:
+	docker run --gpus device=$(GPU_DEVICE) \
+		-e SEC_API_ORGANIZATION="$(SEC_API_ORGANIZATION)" \
+		-e SEC_API_EMAIL="$(SEC_API_EMAIL)" \
+		-v ./sec_data:/app/sec_data \
+		-v ./localworkspace:/app/localworkspace \
+		-p $(API_PORT):8081 \
+		$(IMAGE_NAME)
+
+.PHONY: docker-start
+docker-start: docker-build docker-run
