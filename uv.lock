@@ -2497,24 +2497,30 @@ name = "olmocr-sec-filings"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "fastapi" },
     { name = "guidellm", extra = ["recommended"] },
     { name = "loguru" },
     { name = "nvitop" },
     { name = "olmocr" },
     { name = "playwright" },
+    { name = "pydantic-settings" },
     { name = "ratelimit" },
+    { name = "uvicorn", extra = ["standard"] },
     { name = "vllm" },
     { name = "yfinance" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = ">=0.115.0" },
     { name = "guidellm", extras = ["recommended"], specifier = ">=0.5.4" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "nvitop", specifier = ">=1.6.2" },
     { name = "olmocr", specifier = ">=0.4.27" },
     { name = "playwright", specifier = ">=1.49" },
+    { name = "pydantic-settings", specifier = ">=2.6.0" },
     { name = "ratelimit", specifier = ">=2.2.1" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
     { name = "vllm", specifier = ">=0.17.1" },
     { name = "yfinance", specifier = ">=1.2.0" },
 ]

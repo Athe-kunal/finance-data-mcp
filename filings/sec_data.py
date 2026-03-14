@@ -8,6 +8,7 @@ from typing import NamedTuple
 from loguru import logger
 
 from filings import utils
+from settings import olmocr_settings
 
 
 class SecResults(NamedTuple):
@@ -23,10 +24,12 @@ def get_sec_results(
     year: str,
     filing_types: list[str] = ["10-K", "10-Q"],
     include_amends: bool = True,
-    company: str = "Indiana University Bloomington",
-    email: str = "astmohap@iu.edu",
+    company: str | None = None,
+    email: str | None = None,
 ) -> list[SecResults]:
     """Fetch SEC filing metadata for the given ticker and year."""
+    company = company or olmocr_settings.sec_api_organization
+    email = email or olmocr_settings.sec_api_email
     cik = utils.get_cik_by_ticker(ticker)
     logger.info(f"For {ticker=} found {cik=}")
 
@@ -92,10 +95,12 @@ async def save_sec_results_as_pdfs(
     sec_results: list[SecResults],
     ticker: str,
     year: str,
-    company: str = "Indiana University Bloomington",
-    email: str = "astmohap@iu.edu",
+    company: str | None = None,
+    email: str | None = None,
 ) -> list[Path]:
     """Save SEC results as PDF files."""
+    company = company or olmocr_settings.sec_api_organization
+    email = email or olmocr_settings.sec_api_email
     cik = utils.get_cik_by_ticker(ticker)
     rgld_cik = int(cik.lstrip("0"))
     output_dir = Path("sec_data") / f"{ticker}-{year}"
@@ -125,8 +130,6 @@ async def sec_main(
     year: str,
     filing_types: list[str] = ["10-K", "10-Q"],
     include_amends: bool = True,
-    company: str = "Indiana University Bloomington",
-    email: str = "astmohap@iu.edu",
 ) -> tuple[list[SecResults], list[Path]]:
     """Fetch SEC results and save them as PDFs."""
     sec_results = get_sec_results(
@@ -134,15 +137,11 @@ async def sec_main(
         year=year,
         filing_types=filing_types,
         include_amends=include_amends,
-        company=company,
-        email=email,
     )
     pdf_paths = await save_sec_results_as_pdfs(
         sec_results=sec_results,
         ticker=ticker,
         year=year,
-        company=company,
-        email=email,
     )
     return sec_results, pdf_paths
 
@@ -162,25 +161,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--include-amends", type=bool, default=True, help="Include amended filings"
     )
-    parser.add_argument(
-        "--company",
-        type=str,
-        default="IU Bloomington",
-        help="Company name",
-    )
-    parser.add_argument(
-        "--email", type=str, default="athecolab@gmail.com", help="Contact email"
-    )
 
     args = parser.parse_args()
 
-    data = asyncio.run(
+    asyncio.run(
         sec_main(
             ticker=args.ticker,
             year=args.year,
             filing_types=args.filing_types,
             include_amends=args.include_amends,
-            company=args.company,
-            email=args.email,
         )
     )

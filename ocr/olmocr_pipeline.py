@@ -42,9 +42,11 @@ from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, WorkQueue
 
-DEFAULT_SERVER = os.environ.get("OLMOCR_SERVER", "http://localhost:8000/v1")
-DEFAULT_MODEL = "allenai/olmOCR-2-7B-1025-FP8"
-DEFAULT_WORKSPACE = "./localworkspace"
+from settings import olmocr_settings
+
+DEFAULT_SERVER = olmocr_settings.olmocr_server
+DEFAULT_MODEL = olmocr_settings.olmocr_model
+DEFAULT_WORKSPACE = olmocr_settings.olmocr_workspace
 # Loguru: same format as before (asctime - name - levelname - message)
 _LOG_FMT = "{time:YYYY-MM-DD HH:mm:ss} - {extra[name]} - {level} - {message}"
 _loguru_logger.remove()
