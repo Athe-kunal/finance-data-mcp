@@ -27,8 +27,8 @@ _TABLE_RE = re.compile(r"<table[\s\S]*?</table>", re.IGNORECASE)
 _SECTION_TITLE_RE = re.compile(
     r"^(Item\s+\d+[A-C]?\..*|Part\s+[IV]+.*)", re.MULTILINE | re.IGNORECASE
 )
-_MIN_CHUNK_CHARS = 200
-_EMBED_BATCH_SIZE = 32
+_MIN_CHUNK_CHARS = 2048
+_EMBED_BATCH_SIZE = 2048
 
 # Key type: (ticker, year, filing_type, filing_date)
 IndexKey = tuple[str, str, str, str]
@@ -100,7 +100,7 @@ def chunk_markdown(text: str) -> list[Chunk]:
             if (
                 chunks
                 and chunks[-1].chunk_type == "text"
-                and len(chunks[-1].text) < _MIN_CHUNK_CHARS
+                and len(chunks[-1].text.replace(" ", "")) < _MIN_CHUNK_CHARS
             ):
                 chunks[-1].text = chunks[-1].text + "\n\n" + para_clean
                 if title_match:
