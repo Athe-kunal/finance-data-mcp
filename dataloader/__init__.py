@@ -7,7 +7,6 @@ from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
 from .vector_store import (
     Chunk,
     FaissVectorIndex,
-    FaissVectorStore,
     chunk_markdown,
     embed_chunks,
 )
@@ -20,7 +19,6 @@ __all__ = [
     "markdown_to_repl_env",
     "Chunk",
     "FaissVectorIndex",
-    "FaissVectorStore",
     "chunk_markdown",
     "embed_chunks",
 ]
