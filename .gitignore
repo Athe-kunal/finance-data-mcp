@@ -211,3 +211,7 @@ sec_data/
 localworkspace/
 
 benchmark.yaml
+
+dev.ipynb
+
+faiss_indexes/
