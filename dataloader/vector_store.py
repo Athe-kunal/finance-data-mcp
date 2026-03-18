@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import pickle
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Sequence
@@ -12,47 +11,19 @@ import faiss
 from settings import olmocr_settings
 import numpy as np
 from openai import OpenAI
-import markdownify
 
 from filings.sec_data import load_sec_results
 from ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from dataloader.pipeline import ensure_sec_data
+from dataloader.chunker import chunk_markdown, Chunk
 
 _log = logging.getLogger(__name__)
-_PAGE_TAG_RE = re.compile(r"<PAGE-NUM-(\d+)>")
-_TABLE_RE = re.compile(r"<table[\s\S]*?</table>", re.IGNORECASE)
-_SECTION_TITLE_RE = re.compile(
-    r"^(Item\s+\d+[A-C]?\..*|Part\s+[IV]+.*)", re.MULTILINE | re.IGNORECASE
-)
-_MIN_CHUNK_CHARS = 2048
 _EMBED_BATCH_SIZE = 2048
-
 
 class IndexKey(NamedTuple):
     ticker: str
     year: str
     filing_type: str
-
-
-@dataclass
-class Chunk:
-    """A single logical unit extracted from a markdown document."""
-
-    text: str
-    chunk_type: str  # "table" | "text"
-    page_num: int | None
-    section_title: str | None
-    index: int
-
-    def __repr__(self) -> str:  # pragma: no cover
-        preview = self.text[:80].replace("\n", " ")
-        return (
-            f"Chunk(index={self.index}, type={self.chunk_type!r}, "
-            f"page={self.page_num}, section={self.section_title!r}, "
-            f"text={preview!r}...) "
-            f"len(text)={len(preview)}"
-        )
-
 
 @dataclass
 class _FilingData:
@@ -60,76 +31,6 @@ class _FilingData:
     embeddings: np.ndarray
     faiss_index: "faiss.Index"
     filing_date: str | None
-
-
-def chunk_markdown(text: str) -> list[Chunk]:
-    """Split markdown *text* into :class:`Chunk` objects.
-
-    Strategy:
-    1. Track current page via ``<PAGE-NUM-X>`` tags.
-    2. HTML ``<table>…</table>`` blocks are kept as atomic "table" chunks.
-    3. Remaining text is split on blank lines; short fragments (< 200 chars)
-       are merged into their predecessor.
-    4. Section titles (``Item 1.``, ``Part II``, …) are attached as metadata.
-    """
-    chunks: list[Chunk] = []
-    current_page: int | None = None
-    current_section: str | None = None
-    index = 0
-
-    parts = _TABLE_RE.split(text)
-    tables = _TABLE_RE.findall(text)
-
-    for part_idx, non_table_text in enumerate(parts):
-        for raw_para in re.split(r"\n{2,}", non_table_text):
-            para = raw_para.strip()
-            if not para:
-                continue
-
-            for m in _PAGE_TAG_RE.finditer(para):
-                current_page = int(m.group(1))
-            para_clean = _PAGE_TAG_RE.sub("", para).strip()
-            if not para_clean:
-                continue
-
-            title_match = _SECTION_TITLE_RE.search(para_clean)
-            if title_match:
-                current_section = title_match.group(0).strip()
-
-            if (
-                chunks
-                and chunks[-1].chunk_type == "text"
-                and len(chunks[-1].text.replace(" ", "")) < _MIN_CHUNK_CHARS
-            ):
-                chunks[-1].text = chunks[-1].text + "\n\n" + para_clean
-                if title_match:
-                    chunks[-1].section_title = current_section
-                continue
-
-            chunks.append(
-                Chunk(
-                    text=para_clean,
-                    chunk_type="text",
-                    page_num=current_page,
-                    section_title=current_section,
-                    index=index,
-                )
-            )
-            index += 1
-
-        if part_idx < len(tables):
-            chunks.append(
-                Chunk(
-                    text=tables[part_idx].strip(),
-                    chunk_type="table",
-                    page_num=current_page,
-                    section_title=current_section,
-                    index=index,
-                )
-            )
-            index += 1
-
-    return chunks
 
 
 def embed_chunks(chunks: list[Chunk], client: "OpenAI", model: str) -> np.ndarray:
@@ -506,14 +407,14 @@ class FaissVectorIndex:
         k = min(top_k, len(data.chunks))
         scores, indices = data.faiss_index.search(q_vec, k)
 
-        results = []
+        results: list[tuple[Chunk, float]] = []
         for score, idx in zip(scores[0], indices[0]):
             if idx == -1:
                 continue
             chunk = data.chunks[idx]
             if chunk.chunk_type == "table":
                 chunk = Chunk(
-                    text=markdownify.markdownify(chunk.text, heading_style="ATX"),
+                    text=chunk.text,
                     chunk_type=chunk.chunk_type,
                     page_num=chunk.page_num,
                     section_title=chunk.section_title,
@@ -522,7 +423,7 @@ class FaissVectorIndex:
             results.append((chunk, float(score)))
         return results
 
-    def evict(self, ticker: str, year: str, filing_type: str, filing_date: str) -> None:
+    def evict(self, ticker: str, year: str, filing_type: str) -> None:
         """Drop a loaded index from the memory cache to free GPU/CPU RAM."""
         self._cache.pop(IndexKey(ticker, year, filing_type), None)
 
