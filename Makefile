@@ -24,6 +24,7 @@ vllm-olmocr-serve:
 		--data-parallel-size $(DATA_PARALLEL_SIZE) \
 		--max-num-batched-tokens 32768 \
 		--mm-encoder-tp-mode "data" \
+		--limit-mm-per-prompt '{"video": 0}' \
 		--max-num-seqs 8192 \
 		--port $(PORT) \
 		--host $(SERVER)
