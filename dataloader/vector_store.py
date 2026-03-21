@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import pickle
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Sequence
@@ -20,6 +21,14 @@ from earnings_transcripts.transcripts import Transcript
 
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_data_path(path: Path) -> Path:
+    path = path.expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (_PROJECT_ROOT / path).resolve()
 
 
 class IndexKey(NamedTuple):
@@ -111,7 +120,8 @@ class FaissVectorIndex:
     ----------
     index_dir:
         Root directory for persisted indexes.
-        Defaults to ``settings.faiss_index_dir`` (``"./faiss_indexes"``).
+        Relative paths are resolved from the repository root (parent of ``dataloader/``).
+        Defaults to ``settings.faiss_index_dir``.
     embedding_server:
         vLLM embedding endpoint base URL.
         Defaults to ``settings.embedding_server``.
@@ -130,7 +140,9 @@ class FaissVectorIndex:
         embedding_model: str | None = None,
         use_gpu: bool | None = None,
     ) -> None:
-        self._index_dir = Path(index_dir or sec_settings.faiss_index_dir)
+        self._index_dir = _resolve_data_path(
+            Path(index_dir or sec_settings.faiss_index_dir)
+        )
         self._embedding_server = embedding_server or sec_settings.embedding_server
         self._embedding_model = embedding_model or sec_settings.embedding_model
         self._use_gpu = use_gpu if use_gpu is not None else sec_settings.faiss_use_gpu
@@ -182,15 +194,9 @@ class FaissVectorIndex:
             return [Path(path) for path in transcript_paths]
 
         base = Path(sec_settings.earnings_transcripts_dir)
-        candidates = [
-            base / f"{ticker}-{year}",
-            base / ticker / year,
-        ]
-
-        for path in candidates:
-            if path.exists():
-                return sorted(path.glob("Q*.jsonl"))
-
+        path = base / ticker / year
+        if path.exists():
+            return sorted(path.glob("Q*.jsonl"))
         return []
 
     def _save_filing(self, key: IndexKey, data: _FilingData) -> None:
@@ -459,6 +465,28 @@ class FaissVectorIndex:
             results.append({"filing_type": filing_type, "filing_date": filing_date})
 
         return results
+
+    def resolve_transcript_quarters(
+        self, ticker: str, year: str
+    ) -> tuple[str, list[str]] | None:
+        """Return ``(ticker_dir, [Q1,…])`` for dirs under ``{index_dir}/{ticker}/{year}/``."""
+        year_s = str(year).strip()
+        for t in (ticker.upper(), ticker):
+            base = self._index_dir / t / year_s
+            if not base.is_dir():
+                continue
+            found: set[str] = set()
+            for sub in base.iterdir():
+                if not sub.is_dir():
+                    continue
+                if not (sub / "index.faiss").is_file():
+                    continue
+                name = sub.name.upper()
+                if re.fullmatch(r"Q[1-4]", name):
+                    found.add(name)
+            if found:
+                return t, sorted(found, key=lambda s: int(s[1]))
+        return None
 
     def list_indexes(self) -> list[IndexKey]:
         """Return all ``IndexKey``s present on disk (across all tickers and years)."""

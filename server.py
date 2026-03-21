@@ -6,8 +6,9 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from dataloader.chunker import Chunk
 from dataloader.vector_store import FaissVectorIndex
-from earnings_transcripts.transcripts import get_transcripts_for_year
+from earnings_transcripts.transcripts import get_transcripts_for_year_async
 from filings.utils import company_to_ticker
 from filings.sec_data import sec_main
 from ocr.olmocr_pipeline import run_olmo_ocr
@@ -58,7 +59,7 @@ class EarningsTranscriptsYearRequest(BaseModel):
 
 @app.post("/earnings_transcripts/for_year")
 async def earnings_transcripts_for_year(request: EarningsTranscriptsYearRequest):
-    transcripts = await get_transcripts_for_year(request.ticker, request.year)
+    transcripts = await get_transcripts_for_year_async(request.ticker, request.year)
     return [dataclasses.asdict(t) for t in transcripts]
 
 
@@ -133,6 +134,19 @@ class VectorEmbedRequest(BaseModel):
     force: bool = False
 
 
+class TranscriptEmbedRequest(BaseModel):
+    ticker: str
+    year: str
+    force: bool = False
+
+
+class TranscriptSearchRequest(BaseModel):
+    ticker: str
+    year: str
+    query: str
+    top_k: int = 5
+
+
 @app.post("/vector_store/embed")
 def vector_store_embed(request: VectorEmbedRequest):
     """Build and persist FAISS indexes from all markdown files in a directory.
@@ -174,6 +188,26 @@ def vector_store_embed(request: VectorEmbedRequest):
     }
 
 
+@app.post("/vector_store/embed_transcripts")
+def vector_store_embed_transcripts(request: TranscriptEmbedRequest):
+    try:
+        keys = vector_index.from_earnings_transcript_jsonl(
+            request.ticker,
+            request.year,
+            force=request.force,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {
+        "built": [
+            {"ticker": k.ticker, "year": k.year, "filing_type": k.filing_type}
+            for k in keys
+        ]
+    }
+
+
 class ListFilingsRequest(BaseModel):
     ticker: str
     year: str
@@ -203,6 +237,7 @@ class ChunkResult(BaseModel):
     section_title: str | None
     chunk_index: int
     score: float
+    filing_type: str | None = None
 
 
 @app.post("/vector_store/search", response_model=list[ChunkResult])
@@ -235,4 +270,46 @@ def vector_store_search(request: VectorSearchRequest):
             score=score,
         )
         for chunk, score in results
+    ]
+
+
+@app.post("/vector_store/search_transcripts", response_model=list[ChunkResult])
+def vector_store_search_transcripts(request: TranscriptSearchRequest):
+    year_s = str(request.year).strip()
+    resolved = vector_index.resolve_transcript_quarters(request.ticker, year_s)
+    if not resolved:
+        raise HTTPException(
+            status_code=404,
+            detail="No transcript indexes (Q1–Q4) for this ticker/year.",
+        )
+    ticker_key, quarters = resolved
+    merged: list[tuple[Chunk, float, str]] = []
+    for ft in quarters:
+        try:
+            hits = vector_index.search(
+                ticker=ticker_key,
+                year=year_s,
+                filing_type=ft,
+                query=request.query,
+                top_k=request.top_k,
+            )
+        except FileNotFoundError:
+            continue
+        for chunk, score in hits:
+            merged.append((chunk, score, ft))
+    merged.sort(key=lambda item: -item[1])
+    merged = merged[: request.top_k]
+    if not merged:
+        raise HTTPException(status_code=404, detail="No transcript search hits.")
+    return [
+        ChunkResult(
+            text=chunk.text,
+            chunk_type=chunk.chunk_type,
+            page_num=chunk.page_num,
+            section_title=chunk.section_title,
+            chunk_index=chunk.index,
+            score=score,
+            filing_type=ft,
+        )
+        for chunk, score, ft in merged
     ]

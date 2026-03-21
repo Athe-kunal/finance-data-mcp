@@ -11,6 +11,8 @@ _SECTION_TITLE_RE = re.compile(
 )
 _MIN_CHUNK_CHARS = 1024
 _MIN_PAGE_BREAK_CHARS = 512
+_EARNINGS_TRANSCRIPT_CHUNK_SIZE = 1024
+_EARNINGS_TRANSCRIPT_OVERLAP = 256
 
 
 @dataclass
@@ -214,8 +216,8 @@ def chunk_markdown(text: str) -> list[Chunk]:
 
 def chunk_text_with_overlap(
     text: str,
-    chunk_size: int = 2048,
-    overlap: int = 256,
+    chunk_size: int = _EARNINGS_TRANSCRIPT_CHUNK_SIZE,
+    overlap: int = _EARNINGS_TRANSCRIPT_OVERLAP,
 ) -> list[str]:
     """Split text into overlapping character windows."""
     cleaned = text.strip()

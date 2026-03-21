@@ -178,7 +178,8 @@ def _parse_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
 def _write_transcript_jsonl(transcript: Transcript) -> Path:
     out_dir = (
         Path(sec_settings.earnings_transcripts_dir)
-        / f"{transcript.ticker}-{transcript.year}"
+        / transcript.ticker
+        / str(transcript.year)
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"Q{transcript.quarter_num}.jsonl"
