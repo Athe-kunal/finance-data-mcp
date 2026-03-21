@@ -1,10 +1,9 @@
 from __future__ import annotations
+
 import argparse
 import asyncio
-import concurrent.futures
 import datetime
 import dataclasses
-import functools
 import json
 import re
 from pathlib import Path
@@ -13,12 +12,14 @@ from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 from loguru import logger
-from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    Playwright,
+    TimeoutError as PlaywrightTimeoutError,
+    sync_playwright,
+)
 
 from settings import sec_settings
 
@@ -95,24 +96,31 @@ def _probe_transcript_url(url: str, *, timeout_sec: float = 20.0) -> None:
         ) from exc
 
 
-def _headless_chrome_options() -> Options:
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    return options
+def _chromium_launch_args() -> list[str]:
+    return [
+        "--disable-gpu",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+    ]
 
 
-def _new_chrome_driver() -> webdriver.Chrome:
-    return webdriver.Chrome(options=_headless_chrome_options())
-
-
-def _wait_for_transcript_dom(driver: webdriver.Chrome) -> None:
-    WebDriverWait(driver, 20).until(
-        EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.flex.flex-col.my-5"))
+def _new_browser_context(playwright: Playwright) -> tuple[Browser, BrowserContext]:
+    browser = playwright.chromium.launch(
+        headless=True,
+        args=_chromium_launch_args(),
     )
+    context = browser.new_context(
+        viewport={"width": 1920, "height": 1080},
+        user_agent=(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+    )
+    return browser, context
+
+
+def _wait_for_transcript_dom(page: Page) -> None:
+    page.wait_for_selector("div.flex.flex-col.my-5", timeout=20_000)
 
 
 def _parse_transcript_metadata(
@@ -175,96 +183,60 @@ def _write_transcript_jsonl(transcript: Transcript) -> Path:
     return path
 
 
-def _get_transcript_sync(ticker: str, year: int, quarter_num: int) -> Transcript:
-    url = _make_url(ticker, year, quarter_num)
-    _probe_transcript_url(url)
-
-    driver = _new_chrome_driver()
-    try:
-        driver.get(url)
-        _wait_for_transcript_dom(driver)
-
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        parsed_quarter, date_iso = _parse_transcript_metadata(soup, quarter_num)
-        speaker_texts = _parse_speaker_texts(soup)
-
-        transcript = Transcript(
-            ticker=ticker,
-            year=year,
-            quarter_num=parsed_quarter,
-            date=date_iso,
-            speaker_texts=speaker_texts,
-        )
-        _write_transcript_jsonl(transcript)
-        return transcript
-    finally:
-        driver.quit()
-
-
-async def get_transcript(
+def _load_transcript_with_page(
+    page: Page,
     ticker: str,
     year: int,
     quarter_num: int,
-    *,
-    executor: concurrent.futures.Executor | None = None,
 ) -> Transcript:
-    """Fetches one transcript; blocking I/O runs on ``executor`` (or the loop default)."""
-    loop = asyncio.get_running_loop()
-    fn = functools.partial(_get_transcript_sync, ticker, year, quarter_num)
-    return await loop.run_in_executor(executor, fn)
+    url = _make_url(ticker, year, quarter_num)
+    _probe_transcript_url(url)
+
+    page.goto(url, wait_until="domcontentloaded")
+    _wait_for_transcript_dom(page)
+
+    soup = BeautifulSoup(page.content(), "html.parser")
+    parsed_quarter, date_iso = _parse_transcript_metadata(soup, quarter_num)
+    speaker_texts = _parse_speaker_texts(soup)
+
+    transcript = Transcript(
+        ticker=ticker,
+        year=year,
+        quarter_num=parsed_quarter,
+        date=date_iso,
+        speaker_texts=speaker_texts,
+    )
+    _write_transcript_jsonl(transcript)
+    return transcript
 
 
-async def get_transcripts_for_year(ticker: str, year: int) -> list[Transcript]:
-    """Fetches transcripts for Q1–Q4 in parallel via a :class:`ThreadPoolExecutor`.
-
-    Quarters that are missing over HTTP (urllib) or time out in WebDriverWait are
-    skipped after logging. Other errors propagate.
-    """
-    loop = asyncio.get_running_loop()
-    quarters = (1, 2, 3, 4)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(quarters)) as pool:
-        tasks = [
-            loop.run_in_executor(
-                pool,
-                functools.partial(_get_transcript_sync, ticker, year, quarter_num),
-            )
-            for quarter_num in quarters
-        ]
-        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-
+def get_transcripts_for_year_sync(ticker: str, year: int) -> list[Transcript]:
     transcripts: list[Transcript] = []
-    for quarter_num, outcome in zip(quarters, outcomes, strict=True):
-        if isinstance(outcome, Transcript):
-            transcripts.append(outcome)
-            continue
-        if isinstance(outcome, AssertionError):
-            raise outcome
-        if isinstance(outcome, TranscriptUrlDoesNotExistError):
-            url = _make_url(ticker, year, quarter_num)
-            logger.error(
-                "Skipping transcript: URL missing or unreachable (urllib probe). "
-                "{} | ticker={} year={} quarter={} url={}",
-                outcome,
-                ticker,
-                year,
-                quarter_num,
-                url,
-            )
-            continue
-        if isinstance(outcome, TimeoutException):
-            url = _make_url(ticker, year, quarter_num)
-            logger.error(
-                "Skipping transcript: WebDriverWait timed out waiting for "
-                "'div.flex.flex-col.my-5' (missing transcript or wrong page). "
-                "TimeoutException: {} | ticker={} year={} quarter={} url={}",
-                str(outcome).strip(),
-                ticker,
-                year,
-                quarter_num,
-                url,
-            )
-            continue
-        raise outcome
+    with sync_playwright() as playwright:
+        browser, context = _new_browser_context(playwright)
+        try:
+            page = context.new_page()
+            for quarter_num in (1, 2, 3, 4):
+                try:
+                    transcript = _load_transcript_with_page(
+                        page, ticker, year, quarter_num
+                    )
+                    transcripts.append(transcript)
+                except TranscriptUrlDoesNotExistError as exc:
+                    logger.error(
+                        f"Skipping transcript: URL missing or unreachable. "
+                        f"ticker={ticker} year={year} quarter={quarter_num} error={exc}"
+                    )
+                except PlaywrightTimeoutError as exc:
+                    logger.error(
+                        f"Skipping transcript: timeout waiting for transcript DOM. "
+                        f"ticker={ticker} year={year} quarter={quarter_num} "
+                        f"error={str(exc).strip()}"
+                    )
+        finally:
+            context.close()
+            browser.close()
+
     return transcripts
 
 
@@ -275,22 +247,22 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "ticker",
         nargs="?",
-        default="AAPL",
+        default="AMZN",
         help="Stock ticker symbol (default: %(default)s)",
     )
     parser.add_argument(
         "year",
         nargs="?",
         type=int,
-        default=datetime.datetime.now().year,
+        default=datetime.datetime.now().year - 1,
         help="Fiscal year (default: current year)",
     )
     return parser.parse_args()
 
 
-async def _main_async(args: argparse.Namespace) -> None:
+def _main(args: argparse.Namespace) -> None:
     logger.info("Fetching transcripts for ticker={} year={}", args.ticker, args.year)
-    transcripts = await get_transcripts_for_year(args.ticker, args.year)
+    transcripts = get_transcripts_for_year_sync(args.ticker, args.year)
     for item in transcripts:
         logger.info(
             "Got Q{} date={} speaker_blocks={}",
@@ -301,9 +273,5 @@ async def _main_async(args: argparse.Namespace) -> None:
     logger.info("Done: {} quarter(s) loaded", len(transcripts))
 
 
-def main() -> None:
-    asyncio.run(_main_async(_parse_args()))
-
-
 if __name__ == "__main__":
-    main()
+    _main(_parse_args())
