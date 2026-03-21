@@ -15,7 +15,7 @@ class SECSettings(BaseSettings):
 
     # Downloaded SEC PDFs and sec_results.json: {sec_data_dir}/{ticker}-{year}/
     sec_data_dir: str = "sec_data"
-
+    earnings_transcripts_dir: str = "earnings_transcripts_data"
     # Embedding server (vLLM pooling runner)
     embedding_server: str = "http://127.0.0.1:8002/v1"
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"

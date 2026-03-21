@@ -1,3 +1,4 @@
+import dataclasses
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -6,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from dataloader.vector_store import FaissVectorIndex
+from earnings_transcripts.transcripts import get_transcripts_for_year
 from filings.utils import company_to_ticker
 from filings.sec_data import sec_main
 from ocr.olmocr_pipeline import run_olmo_ocr
@@ -47,6 +49,17 @@ class SecMainRequest(BaseModel):
     year: str
     filing_types: list[str] = ["10-K", "10-Q"]
     include_amends: bool = True
+
+
+class EarningsTranscriptsYearRequest(BaseModel):
+    ticker: str
+    year: int
+
+
+@app.post("/earnings_transcripts/for_year")
+async def earnings_transcripts_for_year(request: EarningsTranscriptsYearRequest):
+    transcripts = await get_transcripts_for_year(request.ticker, request.year)
+    return [dataclasses.asdict(t) for t in transcripts]
 
 
 @app.post("/sec_main")
