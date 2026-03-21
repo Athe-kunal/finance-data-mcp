@@ -11,6 +11,8 @@ _SECTION_TITLE_RE = re.compile(
 )
 _MIN_CHUNK_CHARS = 1024
 _MIN_PAGE_BREAK_CHARS = 512
+_EARNINGS_TRANSCRIPT_CHUNK_SIZE = 1024
+_EARNINGS_TRANSCRIPT_OVERLAP = 256
 
 
 @dataclass
@@ -56,7 +58,9 @@ def _extract_section(para: str, current_section: str | None) -> str | None:
     return current_section
 
 
-def _split_on_page_tags(text: str, current_page: int | None) -> list[tuple[str, int | None]]:
+def _split_on_page_tags(
+    text: str, current_page: int | None
+) -> list[tuple[str, int | None]]:
     """Split a text block into (content, page_num) segments at every <PAGE-NUM-X> tag.
 
     Each segment inherits the page number of the most recently seen tag.
@@ -195,7 +199,9 @@ def chunk_markdown(text: str) -> list[Chunk]:
             flush_buffer()
             chunks.append(
                 _make_chunk(
-                    text=markdownify.markdownify(tables[part_idx].strip(), heading_style="ATX"),
+                    text=markdownify.markdownify(
+                        tables[part_idx].strip(), heading_style="ATX"
+                    ),
                     chunk_type="table",
                     page_num=current_page,
                     section_title=current_section,
@@ -205,4 +211,68 @@ def chunk_markdown(text: str) -> list[Chunk]:
             index += 1
 
     flush_buffer()
+    return chunks
+
+
+def chunk_text_with_overlap(
+    text: str,
+    chunk_size: int = _EARNINGS_TRANSCRIPT_CHUNK_SIZE,
+    overlap: int = _EARNINGS_TRANSCRIPT_OVERLAP,
+) -> list[str]:
+    """Split text into overlapping character windows."""
+    cleaned = text.strip()
+    if not cleaned:
+        return []
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if overlap < 0:
+        raise ValueError("overlap must be non-negative")
+    if overlap >= chunk_size:
+        raise ValueError("overlap must be smaller than chunk_size")
+
+    windows: list[str] = []
+    step = chunk_size - overlap
+    for start in range(0, len(cleaned), step):
+        window = cleaned[start : start + chunk_size]
+        if not window:
+            break
+        windows.append(window)
+        if start + chunk_size >= len(cleaned):
+            break
+    return windows
+
+
+def chunk_transcript_rows(
+    rows: list[tuple[str, str]],
+    chunk_size: int = 2048,
+    overlap: int = 256,
+) -> list[Chunk]:
+    """Create transcript chunks with speaker-prefixed overlapping text."""
+    chunks: list[Chunk] = []
+    index = 0
+
+    for speaker, text in rows:
+        clean_speaker = speaker.strip()
+        clean_text = text.strip()
+        if not clean_text:
+            continue
+
+        for part in chunk_text_with_overlap(
+            clean_text, chunk_size=chunk_size, overlap=overlap
+        ):
+            chunk_text = (
+                f"Speaker: {clean_speaker}\nText: {part}" if clean_speaker else part
+            )
+            chunks.append(
+                Chunk(
+                    text=chunk_text,
+                    chunk_type="text",
+                    page_num=None,
+                    section_title=clean_speaker or None,
+                    index=index,
+                )
+            )
+            index += 1
+
     return chunks

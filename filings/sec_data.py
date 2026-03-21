@@ -9,7 +9,12 @@ from pathlib import Path
 from loguru import logger
 
 from filings import utils
-from settings import olmocr_settings
+from settings import sec_settings
+
+
+def sec_data_case_dir(ticker: str, year: str) -> Path:
+    """Directory for one ticker/year: ``{sec_data_dir}/{ticker}-{year}/``."""
+    return Path(sec_settings.sec_data_dir) / f"{ticker}-{year}"
 
 
 @dataclass(frozen=True)
@@ -30,8 +35,8 @@ def get_sec_results(
     email: str | None = None,
 ) -> list[SecResults]:
     """Fetch SEC filing metadata for the given ticker and year."""
-    company = company or olmocr_settings.sec_api_organization
-    email = email or olmocr_settings.sec_api_email
+    company = company or sec_settings.sec_api_organization
+    email = email or sec_settings.sec_api_email
     cik = utils.get_cik_by_ticker(ticker)
     logger.info(f"For {ticker=} found {cik=}")
 
@@ -101,11 +106,11 @@ async def save_sec_results_as_pdfs(
     email: str | None = None,
 ) -> list[Path]:
     """Save SEC results as PDF files and persist metadata to ``sec_results.json``."""
-    company = company or olmocr_settings.sec_api_organization
-    email = email or olmocr_settings.sec_api_email
+    company = company or sec_settings.sec_api_organization
+    email = email or sec_settings.sec_api_email
     cik = utils.get_cik_by_ticker(ticker)
     rgld_cik = int(cik.lstrip("0"))
-    output_dir = Path("sec_data") / f"{ticker}-{year}"
+    output_dir = sec_data_case_dir(ticker, year)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     filings_to_save = [
@@ -141,7 +146,7 @@ def load_sec_results(ticker: str, year: str) -> list[SecResults]:
     Returns an empty list if the file does not yet exist (i.e. filings have
     not been downloaded yet for this ticker/year).
     """
-    json_path = Path("sec_data") / f"{ticker}-{year}" / "sec_results.json"
+    json_path = sec_data_case_dir(ticker, year) / "sec_results.json"
     if not json_path.exists():
         return []
     records = json.loads(json_path.read_text(encoding="utf-8"))
@@ -155,6 +160,8 @@ async def sec_main(
     include_amends: bool = True,
 ) -> tuple[list[SecResults], list[Path]]:
     """Fetch SEC results and save them as PDFs."""
+    ticker_name = utils.company_to_ticker(ticker)
+    assert ticker_name, f"The {ticker=} that you provided, is not valid"
     sec_results = get_sec_results(
         ticker=ticker,
         year=year,

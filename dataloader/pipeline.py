@@ -1,4 +1,5 @@
 """Pipeline to fetch SEC filings, run OCR, and prepare REPL environments."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +10,7 @@ from filings.sec_data import (
     save_sec_results_as_pdfs,
 )
 from ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
-from settings import olmocr_settings
+from settings import sec_settings
 
 from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
 
@@ -93,7 +94,7 @@ async def prepare_sec_filing_envs(
     Returns:
         List of MarkdownReplEnvironment, one per filing (e.g. 10-K or 10-Q1..10-Q4).
     """
-    workspace_str = str(workspace or olmocr_settings.olmocr_workspace)
+    workspace_str = str(workspace or sec_settings.olmocr_workspace)
     pdf_dir_str = f"sec_data/{ticker}-{year}"
 
     filing_types = [filing_type]
@@ -112,8 +113,6 @@ async def prepare_sec_filing_envs(
     )
 
     envs: list[MarkdownReplEnvironment] = []
-    # OCR writes markdown to workspace/markdown/<source_file>.md; source_file
-    # matches glob output (e.g. sec_data/GOOG-2025/10-K.pdf)
     rel_pdf_base = f"sec_data/{ticker}-{year}"
     for sr in sec_results:
         source_file = f"{rel_pdf_base}/{sr.form_name}.pdf"

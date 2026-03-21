@@ -215,3 +215,7 @@ benchmark.yaml
 dev.ipynb
 
 faiss_indexes/
+
+earnings_transcripts_data/
+
+chroma_db/

@@ -42,11 +42,13 @@ from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, WorkQueue
 
-from settings import olmocr_settings
+from filings.sec_data import sec_data_case_dir
+from settings import sec_settings
 
-DEFAULT_SERVER = olmocr_settings.olmocr_server
-DEFAULT_MODEL = olmocr_settings.olmocr_model
-DEFAULT_WORKSPACE = olmocr_settings.olmocr_workspace
+DEFAULT_SERVER = sec_settings.olmocr_server
+DEFAULT_MODEL = sec_settings.olmocr_model
+DEFAULT_WORKSPACE = sec_settings.olmocr_workspace
+LAUNCH_VLLM_ENV_VAR = "OLMOCR_LAUNCH_VLLM_FROM_SCRIPT"
 
 
 # Loguru: same format as before (asctime - name - levelname - message)
@@ -67,6 +69,11 @@ tracker = WorkerTracker()
 
 # Global variable for vLLM queue status (updated by vllm_server_task)
 vllm_queued_requests = None
+
+
+def _env_var_is_true(var_name: str) -> bool:
+    return os.getenv(var_name, "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 # Temperature values for retry attempts - higher temperature helps overcome repetition issues
 TEMPERATURE_BY_ATTEMPT = [0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 0.9, 1.0]
@@ -1178,7 +1185,12 @@ async def run_olmo_ocr(
     port: int = 30024,
     unknown_args: list[str] | None = None,
 ):
-    """Run the OCR pipeline with the given options. All parameters have the same defaults as the CLI."""
+    """Run the OCR pipeline with the given options.
+
+    Internal vLLM launch is disabled by default. Set
+    ``OLMOCR_LAUNCH_VLLM_FROM_SCRIPT=true`` and omit ``server`` to allow this
+    function to start a local vLLM server.
+    """
     pdfs = glob.glob(str(pathlib.Path(pdf_dir) / "*.pdf"))
 
     if unknown_args is None:
@@ -1226,7 +1238,15 @@ async def run_olmo_ocr(
         "If you run out of GPU memory during start-up or get 'KV cache is larger than available memory' errors, retry with lower values, e.g. --gpu_memory_utilization 0.80  --max_model_len 16384"
     )
 
-    use_internal_server = not config.server
+    internal_server_requested = not config.server
+    launch_internal_vllm = internal_server_requested and _env_var_is_true(
+        LAUNCH_VLLM_ENV_VAR
+    )
+    if internal_server_requested and not launch_internal_vllm:
+        raise RuntimeError(
+            "No OCR server configured. Start a vLLM server externally and pass --server, "
+            f"or set {LAUNCH_VLLM_ENV_VAR}=true to allow this script to launch vLLM."
+        )
     global max_concurrent_requests_limit
 
     max_concurrent_requests_limit = asyncio.BoundedSemaphore(
@@ -1332,17 +1352,19 @@ async def run_olmo_ocr(
 
     # If you get this far, then you are doing inference and need a GPU
     # check_sglang_version()
-    if use_internal_server:
+    if launch_internal_vllm:
         check_torch_gpu_available()
 
     logger.info(f"Starting pipeline with PID {os.getpid()}")
 
     # Download the model before you do anything else
-    if use_internal_server:
+    if launch_internal_vllm:
         model_name_or_path = await download_model(config.model)
         config.server = f"http://localhost:{config.port}/v1"
         config.model = "olmocr"  # Internal server always uses this name for the model, for supporting weird local model paths
-        logger.info(f"Using internal server at {config.server}")
+        logger.info(
+            f"Using internal server at {config.server} because {LAUNCH_VLLM_ENV_VAR}=true"
+        )
     else:
         logger.info(f"Using external server at {config.server}")
         model_name_or_path = None
@@ -1356,7 +1378,7 @@ async def run_olmo_ocr(
 
     # Start local vLLM instance if not using external one
     vllm_server = None
-    if use_internal_server and model_name_or_path is not None:
+    if launch_internal_vllm and model_name_or_path is not None:
         vllm_server = asyncio.create_task(
             vllm_server_host(model_name_or_path, config, unknown_args)
         )
@@ -1471,7 +1493,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pdf-dir",
         type=str,
-        default="sec_data/AMZN-2025",
+        default=sec_data_case_dir("AMZN", "2025").as_posix(),
         help="Directory containing PDFs to OCR",
     )
     args = parser.parse_args()

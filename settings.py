@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class OlmoOCRSettings(BaseSettings):
+class SECSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # SEC API (required for filings; SEC requires User-Agent with org + email)
@@ -13,13 +13,19 @@ class OlmoOCRSettings(BaseSettings):
     olmocr_model: str = "allenai/olmOCR-2-7B-1025-FP8"
     olmocr_workspace: str = "./localworkspace"
 
+    # Downloaded SEC PDFs and sec_results.json: {sec_data_dir}/{ticker}-{year}/
+    sec_data_dir: str = "sec_data"
+    earnings_transcripts_dir: str = "earnings_transcripts_data"
     # Embedding server (vLLM pooling runner)
     embedding_server: str = "http://127.0.0.1:8888/v1"
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
 
-    # FAISS vector index persistence
-    faiss_index_dir: str = "./faiss_indexes"
-    faiss_use_gpu: bool = True
+    # ChromaDB vector persistence
+    chroma_persist_dir: str = "./chroma_db"
+    chroma_collection_name: str = "sec_filings"
+
+    # FastAPI server URL
+    server_url: str = "http://127.0.0.1:8888"
 
 
-olmocr_settings = OlmoOCRSettings()
+sec_settings = SECSettings()
