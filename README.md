@@ -114,7 +114,7 @@ uv sync --group ocr-md
 Package install (for publishing/consuming from PyPI):
 
 ```bash
-pip install finance_data
+pip install finance_data_llm
 ```
 
 Use package functions directly from Python (no server process required):
@@ -132,7 +132,7 @@ filings = fetch_sec_filings_sync(ticker=ticker or "AMZN", year="2025")
 If you do want to run the API, use the packaged console script:
 
 ```bash
-finance-data-server
+finance-data-llm-server
 ```
 
 ## Usage

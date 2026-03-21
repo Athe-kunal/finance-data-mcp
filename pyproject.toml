@@ -1,5 +1,5 @@
 [project]
-name = "finance_data"
+name = "finance_data_llm"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-finance-data-server = "finance_data.cli:main"
+finance-data-llm-server = "finance_data.cli:main"
 
 [dependency-groups]
 ocr-md = [
