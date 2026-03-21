@@ -21,14 +21,6 @@ from earnings_transcripts.transcripts import Transcript
 
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _resolve_data_path(path: Path) -> Path:
-    path = path.expanduser()
-    if path.is_absolute():
-        return path.resolve()
-    return (_PROJECT_ROOT / path).resolve()
 
 
 class IndexKey(NamedTuple):
@@ -120,8 +112,7 @@ class FaissVectorIndex:
     ----------
     index_dir:
         Root directory for persisted indexes.
-        Relative paths are resolved from the repository root (parent of ``dataloader/``).
-        Defaults to ``settings.faiss_index_dir``.
+        Defaults to ``settings.faiss_index_dir`` (``"./faiss_indexes"``).
     embedding_server:
         vLLM embedding endpoint base URL.
         Defaults to ``settings.embedding_server``.
@@ -140,9 +131,7 @@ class FaissVectorIndex:
         embedding_model: str | None = None,
         use_gpu: bool | None = None,
     ) -> None:
-        self._index_dir = _resolve_data_path(
-            Path(index_dir or sec_settings.faiss_index_dir)
-        )
+        self._index_dir = Path(index_dir or sec_settings.faiss_index_dir)
         self._embedding_server = embedding_server or sec_settings.embedding_server
         self._embedding_model = embedding_model or sec_settings.embedding_model
         self._use_gpu = use_gpu if use_gpu is not None else sec_settings.faiss_use_gpu
