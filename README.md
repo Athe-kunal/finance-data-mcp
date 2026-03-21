@@ -105,6 +105,30 @@ uv sync
 playwright install chromium
 ```
 
+Package install (for publishing/consuming from PyPI):
+
+```bash
+pip install finance_data
+```
+
+Use package functions directly from Python (no server process required):
+
+```python
+from finance_data import (
+    company_name_to_ticker,
+    fetch_sec_filings_sync,
+)
+
+ticker = company_name_to_ticker("Amazon")
+filings = fetch_sec_filings_sync(ticker=ticker or "AMZN", year="2025")
+```
+
+If you do want to run the API, use the packaged console script:
+
+```bash
+finance-data-server
+```
+
 ## Usage
 
 Start vLLM server:

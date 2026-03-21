@@ -1,5 +1,5 @@
 [project]
-name = "olmocr-sec-filings"
+name = "finance_data"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -23,7 +23,26 @@ dependencies = [
     "markdownify>=0.13.1",
 ]
 
+[project.scripts]
+finance-data-server = "finance_data.cli:main"
+
 [dependency-groups]
 mcp = [
     "mcp[cli]>=1.26.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["mcp_server", "server", "settings"]
+
+[tool.setuptools.packages.find]
+include = [
+    "dataloader*",
+    "earnings_transcripts*",
+    "filings*",
+    "finance_data*",
+    "ocr*",
 ]
