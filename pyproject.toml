@@ -16,7 +16,7 @@ dependencies = [
     "yfinance>=1.2.0",
     "guidellm[recommended]>=0.5.4",
     "nvitop>=1.6.2",
-    "faiss-gpu-cu12>=1.13.0",
+    "chromadb>=1.0.20",
     "numpy>=1.26",
     "openai>=1.0",
 ]

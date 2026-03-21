@@ -7,25 +7,20 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from dataloader.chunker import Chunk
-from dataloader.vector_store import FaissVectorIndex
+from dataloader.vector_store import ChromaVectorStore
 from earnings_transcripts.transcripts import get_transcripts_for_year_async
 from filings.utils import company_to_ticker
 from filings.sec_data import sec_main
 from ocr.olmocr_pipeline import run_olmo_ocr
 from settings import sec_settings
 
-vector_index: FaissVectorIndex
+vector_index: ChromaVectorStore
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: F811
     global vector_index
-    vector_index = FaissVectorIndex()
-    for key in vector_index.list_indexes():
-        try:
-            vector_index._load_filing(key)
-        except Exception:
-            pass
+    vector_index = ChromaVectorStore()
     yield
 
 
@@ -120,7 +115,7 @@ def delete_worker_locks():
 
 
 class VectorEmbedRequest(BaseModel):
-    """Build FAISS indexes from already-OCR'd markdown files.
+    """Build ChromaDB vectors from already-OCR'd markdown files.
 
     ``markdown_dir`` should be the folder that contains ``{filing_type}.md``
     files (e.g. ``localworkspace/markdown/sec_data/AMZN-2025``).  All ``.md``
@@ -149,7 +144,7 @@ class TranscriptSearchRequest(BaseModel):
 
 @app.post("/vector_store/embed")
 def vector_store_embed(request: VectorEmbedRequest):
-    """Build and persist FAISS indexes from all markdown files in a directory.
+    """Build and persist ChromaDB vectors from all markdown files in a directory.
 
     Discovers every ``*.md`` file in ``markdown_dir`` and calls
     ``from_markdown_sec_filings()``.  The filing type is extracted from each file stem.
@@ -242,7 +237,7 @@ class ChunkResult(BaseModel):
 
 @app.post("/vector_store/search", response_model=list[ChunkResult])
 def vector_store_search(request: VectorSearchRequest):
-    """Semantic search over a single filing's FAISS index.
+    """Semantic search over a single filing's ChromaDB vectors.
 
     The index must have been built first via ``/vector_store/embed`` or
     ``/sec_main`` + ``/run_olmo_ocr`` + ``/vector_store/embed``.
