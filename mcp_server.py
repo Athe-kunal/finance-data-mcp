@@ -1,12 +1,5 @@
 from __future__ import annotations
 
-"""MCP server for SEC filings and transcript workflows.
-
-This server exposes the same operational functions as ``server.py`` as MCP tools,
-plus file-system exploration tools so MCP clients can inspect generated PDFs,
-JSONL transcripts, OCR markdown, and related artifacts.
-"""
-
 import dataclasses
 import mimetypes
 import shutil
@@ -14,6 +7,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from dataloader.text_splitter import Chunk
 from dataloader.vector_store import ChromaVectorStore
 from earnings_transcripts.transcripts import get_transcripts_for_year_async
 from filings.sec_data import sec_main
@@ -247,7 +241,9 @@ def search_sec_filings_tool(
 
 
 @mcp.tool()
-def search_transcripts_tool(ticker: str, year: str, query: str, top_k: int = 5) -> list[dict]:
+def search_transcripts_tool(
+    ticker: str, year: str, query: str, top_k: int = 5
+) -> list[dict]:
     """Run semantic search across all indexed transcript quarters.
 
     Args:
@@ -263,7 +259,7 @@ def search_transcripts_tool(ticker: str, year: str, query: str, top_k: int = 5) 
         raise FileNotFoundError("No transcript indexes (Q1–Q4) for this ticker/year.")
 
     ticker_key, quarters = resolved
-    merged: list[tuple[object, float, str]] = []
+    merged: list[tuple[Chunk, float, str]] = []
     for filing_type in quarters:
         hits = vector_index.search(
             ticker=ticker_key,
@@ -298,7 +294,9 @@ def list_data_roots_tool() -> list[dict[str, str]]:
 
 
 @mcp.tool()
-def list_data_files_tool(path: str, pattern: str = "**/*", limit: int = 200) -> list[dict]:
+def list_data_files_tool(
+    path: str, pattern: str = "**/*", limit: int = 200
+) -> list[dict]:
     """List files under an allowed directory.
 
     Args:
@@ -322,7 +320,8 @@ def list_data_files_tool(path: str, pattern: str = "**/*", limit: int = 200) -> 
                 "name": candidate.name,
                 "suffix": candidate.suffix.lower(),
                 "size_bytes": candidate.stat().st_size,
-                "mime_type": mimetypes.guess_type(candidate.name)[0] or "application/octet-stream",
+                "mime_type": mimetypes.guess_type(candidate.name)[0]
+                or "application/octet-stream",
             }
         )
         if len(files) >= limit:
