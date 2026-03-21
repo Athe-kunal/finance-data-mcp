@@ -16,6 +16,23 @@ Settings are loaded via Pydantic Settings from environment variables or a `.env`
 | `EMBEDDING_MODEL` | Model id passed to the embedding server | `Qwen/Qwen3-Embedding-0.6B` |
 | `CHROMA_PERSIST_DIR` | ChromaDB persistence directory | `./chroma_db` |
 
+
+## MCP server
+
+This repository includes an MCP server at `mcp_server.py` that exposes the same operational functions as `server.py` (SEC fetch, OCR, embedding, and search), plus file exploration tools for PDFs, JSONL, markdown, and other artifacts under configured data roots.
+
+Run it with the MCP dependency group:
+
+```bash
+uv run --group mcp python mcp_server.py
+```
+
+Key exploration tools exposed to MCP clients:
+
+- `list_data_roots_tool`: shows root directories available for browsing.
+- `list_data_files_tool`: glob file listing (for example `**/*.pdf`, `**/*.jsonl`).
+- `read_data_file_tool`: reads text-based files directly and provides metadata/preview for binary files.
+
 ## Docker
 
 ### Build
