@@ -23,8 +23,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-# Install only runtime dependencies into a dedicated venv.
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --group ocr-md
 
 RUN uv run playwright install chromium --with-deps
 
