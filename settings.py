@@ -13,9 +13,8 @@ class SECSettings(BaseSettings):
     olmocr_model: str = "allenai/olmOCR-2-7B-1025-FP8"
     olmocr_workspace: str = "./localworkspace"
 
-    # Downloaded SEC PDFs and SEC metadata JSON: {sec_data_dir}/{ticker}-{year}/
+    # Downloaded SEC PDFs and sec_results.json: {sec_data_dir}/{ticker}-{year}/
     sec_data_dir: str = "sec_data"
-    sec_results_filename: str = "sec_results.json"
     earnings_transcripts_dir: str = "earnings_transcripts_data"
     # Embedding server (vLLM pooling runner)
     embedding_server: str = "http://127.0.0.1:8888/v1"
