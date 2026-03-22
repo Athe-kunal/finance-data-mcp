@@ -17,11 +17,6 @@ def sec_data_case_dir(ticker: str, year: str) -> Path:
     return Path(sec_settings.sec_data_dir) / f"{ticker}-{year}"
 
 
-def sec_results_json_path(ticker: str, year: str) -> Path:
-    """Path to SEC results metadata JSON for one ticker/year."""
-    return sec_data_case_dir(ticker, year) / sec_settings.sec_results_filename
-
-
 @dataclass(frozen=True)
 class SecResults:
     dashes_acc_num: str
@@ -107,7 +102,6 @@ async def save_sec_results_as_pdfs(
     sec_results: list[SecResults],
     ticker: str,
     year: str,
-    metadata_sec_results: list[SecResults] | None = None,
     company: str | None = None,
     email: str | None = None,
 ) -> list[Path]:
@@ -136,16 +130,13 @@ async def save_sec_results_as_pdfs(
     )
 
     # Persist metadata so filing dates are available without re-hitting SEC API.
-    json_path = sec_results_json_path(ticker, year)
-    metadata_to_persist = metadata_sec_results or sec_results
+    json_path = output_dir / "sec_results.json"
     json_path.write_text(
-        json.dumps([asdict(sr) for sr in metadata_to_persist], indent=2),
+        json.dumps([asdict(sr) for sr in sec_results], indent=2),
         encoding="utf-8",
     )
 
-    logger.info(
-        f"Saved {len(pdf_paths)} PDFs and {len(metadata_to_persist)} metadata records to {output_dir}"
-    )
+    logger.info(f"Saved {len(pdf_paths)} PDFs and metadata to {output_dir}")
     return pdf_paths
 
 
@@ -155,7 +146,7 @@ def load_sec_results(ticker: str, year: str) -> list[SecResults]:
     Returns an empty list if the file does not yet exist (i.e. filings have
     not been downloaded yet for this ticker/year).
     """
-    json_path = sec_results_json_path(ticker, year)
+    json_path = sec_data_case_dir(ticker, year) / "sec_results.json"
     if not json_path.exists():
         return []
     records = json.loads(json_path.read_text(encoding="utf-8"))
@@ -171,54 +162,14 @@ async def sec_main(
     """Fetch SEC results and save them as PDFs."""
     ticker_name = utils.company_to_ticker(ticker)
     assert ticker_name, f"The {ticker=} that you provided, is not valid"
-    output_dir = sec_data_case_dir(ticker, year)
-
-    if not output_dir.exists():
-        logger.info(
-            f"No existing SEC data folder found at {output_dir}. Running full SEC pipeline."
-        )
-        sec_results = get_sec_results(
-            ticker=ticker,
-            year=year,
-            filing_types=filing_types,
-            include_amends=include_amends,
-        )
-        pdf_paths = await save_sec_results_as_pdfs(
-            sec_results=sec_results,
-            ticker=ticker,
-            year=year,
-        )
-        return sec_results, pdf_paths
-
-    logger.info(f"Found existing SEC data folder at {output_dir}. Checking for missing filings.")
     sec_results = get_sec_results(
         ticker=ticker,
         year=year,
         filing_types=filing_types,
         include_amends=include_amends,
     )
-
-    existing_pdfs = {
-        path.stem for path in output_dir.glob("*.pdf") if path.is_file()
-    }
-    missing_sec_results = [sr for sr in sec_results if sr.form_name not in existing_pdfs]
-
-    if not missing_sec_results:
-        logger.info(
-            f"No missing SEC filings detected for {ticker=} and {year=}. Skipping PDF save."
-        )
-        sec_results_json_path(ticker, year).write_text(
-            json.dumps([asdict(sr) for sr in sec_results], indent=2),
-            encoding="utf-8",
-        )
-        return sec_results, []
-
-    logger.info(
-        f"Detected {len(missing_sec_results)} missing filing(s) for {ticker=} and {year=}. Saving only missing PDFs."
-    )
     pdf_paths = await save_sec_results_as_pdfs(
-        sec_results=missing_sec_results,
-        metadata_sec_results=sec_results,
+        sec_results=sec_results,
         ticker=ticker,
         year=year,
     )
