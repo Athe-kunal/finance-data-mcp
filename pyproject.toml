@@ -1,5 +1,5 @@
 [project]
-name = "olmocr-sec-filings"
+name = "finance_data_llm"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -9,21 +9,42 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "uvicorn[standard]>=0.32.0",
     "loguru>=0.7.3",
-    "olmocr>=0.4.27",
     "ratelimit>=2.2.1",
     "playwright>=1.49",
-    "vllm>=0.17.1",
     "yfinance>=1.2.0",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+finance-data-llm-server = "finance_data.cli:main"
+
+[dependency-groups]
+ocr-md = [
+    "olmocr>=0.4.27",
+    "vllm>=0.17.1",
     "guidellm[recommended]>=0.5.4",
     "nvitop>=1.6.2",
     "chromadb>=1.0.20",
-    "numpy>=1.26",
     "openai>=1.0",
     "langchain-text-splitters>=0.3.0",
     "markdownify>=0.13.1",
 ]
-
-[dependency-groups]
 mcp = [
     "mcp[cli]>=1.26.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["mcp_server", "server", "settings"]
+
+[tool.setuptools.packages.find]
+include = [
+    "dataloader*",
+    "earnings_transcripts*",
+    "filings*",
+    "finance_data*",
+    "ocr*",
 ]
