@@ -130,7 +130,7 @@ async def save_sec_results_as_pdfs(
     )
 
     # Persist metadata so filing dates are available without re-hitting SEC API.
-    json_path = output_dir / "sec_results.json"
+    json_path = output_dir / sec_settings.sec_metadata_filename
     json_path.write_text(
         json.dumps([asdict(sr) for sr in sec_results], indent=2),
         encoding="utf-8",
@@ -146,7 +146,7 @@ def load_sec_results(ticker: str, year: str) -> list[SecResults]:
     Returns an empty list if the file does not yet exist (i.e. filings have
     not been downloaded yet for this ticker/year).
     """
-    json_path = sec_data_case_dir(ticker, year) / "sec_results.json"
+    json_path = sec_data_case_dir(ticker, year) / sec_settings.sec_metadata_filename
     if not json_path.exists():
         return []
     records = json.loads(json_path.read_text(encoding="utf-8"))
