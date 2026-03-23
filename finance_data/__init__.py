@@ -6,8 +6,8 @@ without starting (or depending on) the FastAPI server runtime.
 
 from .api import (
     company_name_to_ticker,
-    fetch_earnings_transcripts_for_year,
-    fetch_earnings_transcripts_for_year_sync,
+    fetch_earnings_transcript_for_quarter,
+    fetch_earnings_transcript_for_quarter_sync,
     fetch_sec_filings,
     fetch_sec_filings_sync,
     run_olmo_ocr,
@@ -17,8 +17,8 @@ from .app import get_app
 
 __all__ = [
     "company_name_to_ticker",
-    "fetch_earnings_transcripts_for_year",
-    "fetch_earnings_transcripts_for_year_sync",
+    "fetch_earnings_transcript_for_quarter",
+    "fetch_earnings_transcript_for_quarter_sync",
     "fetch_sec_filings",
     "fetch_sec_filings_sync",
     "run_olmo_ocr",

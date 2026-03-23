@@ -3,15 +3,33 @@ from __future__ import annotations
 import dataclasses
 import mimetypes
 from pathlib import Path
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from earnings_transcripts.transcripts import get_transcripts_for_year_async
+from earnings_transcripts.transcripts import get_transcript_for_quarter_async
+from mcp.server.transport_security import TransportSecuritySettings
 from filings.sec_data import sec_main
 from filings.utils import company_to_ticker
 from settings import sec_settings
 
-mcp = FastMCP("sec-filings-data")
+mcp = FastMCP(
+    "sec-filings-data",
+    host="127.0.0.1",
+    port=8000,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[
+            "127.0.0.1:*",
+            "localhost:*",
+            "shirleen-supercritical-contributively.ngrok-free.dev",
+        ],
+        allowed_origins=[
+            "http://localhost:*",
+            "https://shirleen-supercritical-contributively.ngrok-free.dev",
+        ],
+    ),
+)
 
 
 def _resolve_path(path: str) -> Path:
@@ -55,15 +73,22 @@ def company_name_to_ticker_tool(name: str) -> dict[str, str]:
 
 
 @mcp.tool()
-async def earnings_transcripts_for_year_tool(ticker: str, year: int) -> list[dict]:
-    """Fetch earnings-call transcripts for a ticker and year.
+async def earnings_transcript_for_quarter_tool(
+    ticker: str, year: int, quarter: Literal["Q1", "Q2", "Q3", "Q4"]
+) -> dict:
+    """Fetch one earnings-call transcript for a ticker, year, and quarter.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
-        year: Four-digit year to fetch transcript quarters from.
+        year: Four-digit fiscal year.
+        quarter: Fiscal quarter label ``Q1``, ``Q2``, ``Q3``, or ``Q4``.
     """
-    transcripts = await get_transcripts_for_year_async(ticker, year)
-    return [dataclasses.asdict(t) for t in transcripts]
+    transcript = await get_transcript_for_quarter_async(ticker, year, quarter)
+    if transcript is None:
+        raise ValueError(
+            f"No transcript available for ticker={ticker} year={year} {quarter}"
+        )
+    return dataclasses.asdict(transcript)
 
 
 @mcp.tool()
@@ -191,4 +216,4 @@ def read_data_file_tool(path: str, max_bytes: int = 200_000) -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="streamable-http")

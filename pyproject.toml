@@ -30,6 +30,7 @@ ocr-md = [
     "markdownify>=0.13.1",
 ]
 mcp = [
+    "fastmcp>=3.1.1",
     "mcp[cli]>=1.26.0",
 ]
 

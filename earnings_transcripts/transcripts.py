@@ -63,6 +63,16 @@ class TranscriptUrlDoesNotExistError(Exception):
     pass
 
 
+def quarter_label_to_num(quarter: str) -> int:
+    """Parse a quarter label (e.g. ``Q1``, ``q2``, ``Q 3``) into 1–4."""
+    match = re.fullmatch(r"\s*Q\s*([1-4])\s*", quarter.strip(), flags=re.IGNORECASE)
+    if not match:
+        raise ValueError(
+            f"Invalid quarter label {quarter!r}; expected Q1, Q2, Q3, or Q4"
+        )
+    return int(match.group(1))
+
+
 def _make_url(ticker: str, year: int, quarter_num: int) -> str:
     curr_year = datetime.datetime.now().year
     assert year <= curr_year, f"{year=} is in the future for {ticker=} in {curr_year=}"
@@ -274,27 +284,27 @@ async def _fetch_one_quarter(
     return None
 
 
-async def get_transcripts_for_year_async(
+async def get_transcript_for_quarter_async(
     ticker: str,
     year: int,
-    max_concurrency: int = 3,
-) -> list[Transcript]:
+    quarter: str,
+) -> Transcript | None:
+    """Fetch a single earnings-call transcript for one fiscal quarter.
+
+    ``quarter`` must be a label such as ``Q1``, ``Q2``, ``Q3``, or ``Q4``
+    (case-insensitive; optional spaces after ``Q``).
+    """
+    quarter_num = quarter_label_to_num(quarter)
     async with async_playwright() as playwright:
         browser, context = await _new_browser_context(playwright)
         try:
-            semaphore = asyncio.Semaphore(max_concurrency)
-            tasks = [
-                _fetch_one_quarter(context, semaphore, ticker, year, quarter_num)
-                for quarter_num in (1, 2, 3, 4)
-            ]
-            results = await asyncio.gather(*tasks)
+            semaphore = asyncio.Semaphore(1)
+            return await _fetch_one_quarter(
+                context, semaphore, ticker, year, quarter_num
+            )
         finally:
             await context.close()
             await browser.close()
-
-    transcripts = [item for item in results if item is not None]
-    transcripts.sort(key=lambda item: item.quarter_num)
-    return transcripts
 
 
 def _parse_args() -> argparse.Namespace:
@@ -315,22 +325,39 @@ def _parse_args() -> argparse.Namespace:
         help="Fiscal year (default: current year - 1)",
     )
     parser.add_argument(
-        "--max-concurrency",
-        type=int,
-        default=4,
-        help="Max number of concurrent quarter fetches",
+        "--quarter",
+        type=str,
+        default=None,
+        metavar="QX",
+        help="Quarter label: Q1, Q2, Q3, or Q4 (case-insensitive). "
+        "If omitted, fetches Q1–Q4 sequentially.",
     )
     return parser.parse_args()
 
 
+async def _fetch_quarters_sequentially(
+    ticker: str, year: int, quarters: tuple[str, ...]
+) -> list[Transcript]:
+    transcripts: list[Transcript] = []
+    for quarter_label in quarters:
+        item = await get_transcript_for_quarter_async(ticker, year, quarter_label)
+        if item is not None:
+            transcripts.append(item)
+    return transcripts
+
+
 def _main(args: argparse.Namespace) -> None:
     logger.info("Fetching transcripts for ticker={} year={}", args.ticker, args.year)
+    if args.quarter is not None:
+        try:
+            quarter_label_to_num(args.quarter)
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from exc
+        quarters = (args.quarter,)
+    else:
+        quarters = ("Q1", "Q2", "Q3", "Q4")
     transcripts = asyncio.run(
-        get_transcripts_for_year_async(
-            args.ticker,
-            args.year,
-            max_concurrency=args.max_concurrency,
-        )
+        _fetch_quarters_sequentially(args.ticker, args.year, quarters)
     )
     for item in transcripts:
         logger.info(

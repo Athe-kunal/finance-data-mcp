@@ -3,12 +3,13 @@ from __future__ import annotations
 import dataclasses
 import mimetypes
 from pathlib import Path
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
 from dataloader.text_splitter import Chunk
 from dataloader.vector_store import ChromaVectorStore
-from earnings_transcripts.transcripts import get_transcripts_for_year_async
+from earnings_transcripts.transcripts import get_transcript_for_quarter_async
 from filings.sec_data import sec_main
 from filings.utils import company_to_ticker
 from ocr.olmocr_pipeline import run_olmo_ocr
@@ -69,15 +70,22 @@ def company_name_to_ticker_tool(name: str) -> dict[str, str]:
 
 
 @mcp.tool()
-async def earnings_transcripts_for_year_tool(ticker: str, year: int) -> list[dict]:
-    """Fetch earnings-call transcripts for a ticker and year.
+async def earnings_transcript_for_quarter_tool(
+    ticker: str, year: int, quarter: Literal["Q1", "Q2", "Q3", "Q4"]
+) -> dict:
+    """Fetch one earnings-call transcript for a ticker, year, and quarter.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
-        year: Four-digit year to fetch transcript quarters from.
+        year: Four-digit fiscal year.
+        quarter: Fiscal quarter label ``Q1``, ``Q2``, ``Q3``, or ``Q4``.
     """
-    transcripts = await get_transcripts_for_year_async(ticker, year)
-    return [dataclasses.asdict(t) for t in transcripts]
+    transcript = await get_transcript_for_quarter_async(ticker, year, quarter)
+    if transcript is None:
+        raise ValueError(
+            f"No transcript available for ticker={ticker} year={year} {quarter}"
+        )
+    return dataclasses.asdict(transcript)
 
 
 @mcp.tool()

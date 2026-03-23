@@ -4,11 +4,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from dataloader.text_splitter import Chunk
 from dataloader.vector_store import ChromaVectorStore
-from earnings_transcripts.transcripts import get_transcripts_for_year_async
+from earnings_transcripts.transcripts import (
+    get_transcript_for_quarter_async,
+    quarter_label_to_num,
+)
 from filings.utils import company_to_ticker
 from filings.sec_data import sec_main
 from ocr.olmocr_pipeline import run_olmo_ocr
@@ -47,15 +50,28 @@ class SecMainRequest(BaseModel):
     include_amends: bool = True
 
 
-class EarningsTranscriptsYearRequest(BaseModel):
+class EarningsTranscriptQuarterRequest(BaseModel):
     ticker: str
     year: int
+    quarter: str
+
+    @field_validator("quarter")
+    @classmethod
+    def validate_quarter_label(cls, value: str) -> str:
+        return f"Q{quarter_label_to_num(value)}"
 
 
-@app.post("/earnings_transcripts/for_year")
-async def earnings_transcripts_for_year(request: EarningsTranscriptsYearRequest):
-    transcripts = await get_transcripts_for_year_async(request.ticker, request.year)
-    return [dataclasses.asdict(t) for t in transcripts]
+@app.post("/earnings_transcripts/for_quarter")
+async def earnings_transcript_for_quarter(request: EarningsTranscriptQuarterRequest):
+    transcript = await get_transcript_for_quarter_async(
+        request.ticker, request.year, request.quarter
+    )
+    if transcript is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transcript not available for this ticker, year, and quarter",
+        )
+    return dataclasses.asdict(transcript)
 
 
 @app.post("/sec_main")

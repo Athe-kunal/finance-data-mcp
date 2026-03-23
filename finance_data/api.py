@@ -62,17 +62,28 @@ def fetch_sec_filings_sync(
     )
 
 
-async def fetch_earnings_transcripts_for_year(ticker: str, year: int) -> list[dict]:
-    """Fetch and serialize all quarterly transcripts for a ticker/year."""
-    from earnings_transcripts.transcripts import get_transcripts_for_year_async
+async def fetch_earnings_transcript_for_quarter(
+    ticker: str, year: int, quarter: str
+) -> dict | None:
+    """Fetch and serialize one quarterly transcript. Returns None if unavailable.
 
-    transcripts = await get_transcripts_for_year_async(ticker, year)
-    return [dataclasses.asdict(t) for t in transcripts]
+    ``quarter`` must be a label such as ``Q1``, ``Q2``, ``Q3``, or ``Q4``.
+    """
+    from earnings_transcripts.transcripts import get_transcript_for_quarter_async
+
+    transcript = await get_transcript_for_quarter_async(ticker, year, quarter)
+    if transcript is None:
+        return None
+    return dataclasses.asdict(transcript)
 
 
-def fetch_earnings_transcripts_for_year_sync(ticker: str, year: int) -> list[dict]:
-    """Synchronous wrapper for `fetch_earnings_transcripts_for_year`."""
-    return asyncio.run(fetch_earnings_transcripts_for_year(ticker, year))
+def fetch_earnings_transcript_for_quarter_sync(
+    ticker: str, year: int, quarter: str
+) -> dict | None:
+    """Synchronous wrapper for `fetch_earnings_transcript_for_quarter`."""
+    return asyncio.run(
+        fetch_earnings_transcript_for_quarter(ticker, year, quarter)
+    )
 
 
 async def run_olmo_ocr(pdf_dir: str) -> None:
