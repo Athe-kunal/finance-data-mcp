@@ -182,7 +182,7 @@ def embed_sec_filings(request: SecFilingsEmbedRequest):
 @app.post("/vector_store/embed_transcripts")
 def embed_transcripts(request: TranscriptEmbedRequest):
     try:
-        keys = vector_index.from_earnings_transcript_jsonl(
+        keys = vector_index.from_earnings_transcript_markdown(
             request.ticker,
             request.year,
             force=request.force,

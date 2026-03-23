@@ -39,7 +39,7 @@ class Transcript:
     speaker_texts: list[SpeakerText]
 
     def to_markdown(self) -> str:
-        """Format the transcript as markdown: header, date, then each speaker block."""
+        """Format the transcript as markdown with parseable speaker tags."""
         quarter_label = f"Q{self.quarter_num}"
         date_display = self.date.strip() or "—"
         parts: list[str] = [
@@ -55,26 +55,63 @@ class Transcript:
         for block in self.speaker_texts:
             speaker = block.speaker.strip() or "(Unknown speaker)"
             body = block.text.strip() or "_(empty)_"
-            parts.extend([f"### {speaker}", "", body, ""])
+            parts.extend(
+                [
+                    "<speaker-start>",
+                    f"### {speaker}",
+                    "",
+                    body,
+                    "<speaker-end>",
+                    "",
+                ]
+            )
         return "\n".join(parts).rstrip() + "\n"
 
     @classmethod
-    def from_file(cls, jsonl_path: str | Path) -> "Transcript":
-        path = Path(jsonl_path)
+    def from_markdown(cls, markdown_path: str | Path) -> "Transcript":
+        path = Path(markdown_path)
         text = path.read_text(encoding="utf-8").strip()
         if not text:
             raise ValueError(f"Empty transcript file: {path}")
+
+        filename_match = re.fullmatch(
+            r"Q(?P<quarter>[1-4])(?:_(?P<date>\d{4}-\d{2}-\d{2}))?\.md",
+            path.name,
+            flags=re.IGNORECASE,
+        )
+        if not filename_match:
+            raise ValueError(
+                f"Invalid transcript filename {path.name!r}; expected "
+                f"'Q1_YYYY-MM-DD.md' (date optional)."
+            )
+
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
-            data = json.loads(first)
-        utterances = [SpeakerText(**row) for row in data["speaker_texts"]]
+            year = int(path.parent.name)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid transcript year directory {path.parent.name!r} for {path}."
+            ) from exc
+
+        ticker = path.parent.parent.name
+
+        block_matches = re.findall(
+            r"<speaker-start>\s*###\s*(.*?)\n(.*?)<speaker-end>",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if not block_matches:
+            raise ValueError(f"Missing transcript speaker blocks in markdown: {path}")
+
+        utterances = [
+            SpeakerText(speaker=speaker.strip(), text=body.strip())
+            for speaker, body in block_matches
+        ]
+
         return cls(
-            ticker=data["ticker"],
-            year=int(data["year"]),
-            quarter_num=int(data["quarter_num"]),
-            date=data["date"],
+            ticker=ticker,
+            year=year,
+            quarter_num=int(filename_match.group("quarter")),
+            date=filename_match.group("date") or "",
             speaker_texts=utterances,
         )
 
@@ -205,17 +242,48 @@ def _parse_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
     return speaker_texts
 
 
-def _write_transcript_jsonl(transcript: Transcript) -> Path:
+def _write_transcript_markdown(transcript: Transcript) -> Path:
     out_dir = (
         Path(sec_settings.earnings_transcripts_dir)
         / transcript.ticker
         / str(transcript.year)
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"Q{transcript.quarter_num}.jsonl"
+    date_suffix = transcript.date.strip() or "unknown-date"
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_suffix):
+        date_suffix = "unknown-date"
+    path = out_dir / f"Q{transcript.quarter_num}_{date_suffix}.md"
     with path.open("w", encoding="utf-8") as f:
-        f.write(json.dumps(dataclasses.asdict(transcript), ensure_ascii=False) + "\n")
+        f.write(transcript.to_markdown())
     return path
+
+
+def convert_transcript_jsonl_to_markdown(
+    jsonl_path: str | Path, *, delete_jsonl: bool = False
+) -> Path:
+    """Convert one transcript JSONL file into tagged markdown format."""
+    source_path = Path(jsonl_path)
+    text = source_path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"Empty transcript file: {source_path}")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+        data = json.loads(first)
+
+    transcript = Transcript(
+        ticker=data["ticker"],
+        year=int(data["year"]),
+        quarter_num=int(data["quarter_num"]),
+        date=data.get("date", ""),
+        speaker_texts=[SpeakerText(**row) for row in data["speaker_texts"]],
+    )
+    out_path = source_path.with_suffix(".md")
+    out_path.write_text(transcript.to_markdown(), encoding="utf-8")
+    if delete_jsonl:
+        source_path.unlink(missing_ok=True)
+    return out_path
 
 
 async def _load_transcript_with_new_page(
@@ -250,7 +318,7 @@ async def _load_transcript_with_new_page(
             date=date_iso,
             speaker_texts=speaker_texts,
         )
-        _write_transcript_jsonl(transcript)
+        _write_transcript_markdown(transcript)
         return transcript
     finally:
         await page.close()

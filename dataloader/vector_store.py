@@ -11,7 +11,7 @@ import numpy as np
 from chromadb.api.models.Collection import Collection
 from openai import OpenAI
 
-from dataloader.text_splitter import Chunk, chunk_markdown, chunk_transcript_rows
+from dataloader.text_splitter import Chunk, chunk_markdown
 from earnings_transcripts.transcripts import Transcript
 from filings.sec_data import load_sec_results
 from settings import sec_settings
@@ -113,7 +113,7 @@ class ChromaVectorStore:
         candidates: list[Path] = []
         direct = base / ticker / year_s
         if direct.is_dir():
-            candidates.extend(sorted(direct.glob("Q*.jsonl")))
+            candidates.extend(sorted(direct.glob("Q*.md")))
 
         if not candidates and base.is_dir():
             for ticker_dir in base.iterdir():
@@ -121,10 +121,10 @@ class ChromaVectorStore:
                     continue
                 yr = ticker_dir / year_s
                 if yr.is_dir():
-                    candidates.extend(sorted(yr.glob("Q*.jsonl")))
+                    candidates.extend(sorted(yr.glob("Q*.md")))
 
         if not candidates and base.is_dir():
-            candidates.extend(sorted(base.glob(f"**/{year_s}/Q*.jsonl")))
+            candidates.extend(sorted(base.glob(f"**/{year_s}/Q*.md")))
 
         return candidates
 
@@ -140,6 +140,40 @@ class ChromaVectorStore:
         if not md_dir.is_dir():
             return []
         return sorted(md_dir.glob("*.md"))
+
+    @staticmethod
+    def _chunk_transcript_markdown(
+        markdown_text: str,
+        *,
+        chunk_size: int = 2048,
+        overlap: int = 256,
+    ) -> list[Chunk]:
+        speaker_sections = re.findall(
+            r"<speaker-start>[\s\S]*?<speaker-end>",
+            markdown_text,
+            flags=re.IGNORECASE,
+        )
+        sections = speaker_sections or [markdown_text]
+
+        chunks: list[Chunk] = []
+        index = 0
+        for section in sections:
+            for chunk in chunk_markdown(
+                section,
+                chunk_size=chunk_size,
+                overlap=overlap,
+            ):
+                chunks.append(
+                    Chunk(
+                        text=chunk.text,
+                        chunk_type=chunk.chunk_type,
+                        page_num=chunk.page_num,
+                        section_title=chunk.section_title,
+                        index=index,
+                    )
+                )
+                index += 1
+        return chunks
 
     def _embed_for_upsert(self, chunks: list[Chunk]) -> _EmbeddedChunks:
         if not chunks:
@@ -258,7 +292,7 @@ class ChromaVectorStore:
 
         return ingested
 
-    def from_earnings_transcript_jsonl(
+    def from_earnings_transcript_markdown(
         self,
         ticker: str,
         year: str,
@@ -272,18 +306,22 @@ class ChromaVectorStore:
         resolved_paths = self._resolve_transcript_paths(ticker, year, transcript_paths)
         if not resolved_paths:
             raise FileNotFoundError(
-                f"No transcript JSONL files found for ticker={ticker}, year={year} "
+                f"No transcript markdown files found for ticker={ticker}, year={year} "
                 f"under {sec_settings.earnings_transcripts_dir!r}."
             )
 
         for raw_path in resolved_paths:
             tx_path = Path(raw_path)
-            transcript = Transcript.from_file(tx_path)
+            transcript = Transcript.from_markdown(tx_path)
             filing_type = f"Q{transcript.quarter_num}"
             key = IndexKey(ticker=ticker, year=str(year), filing_type=filing_type)
 
-            rows = [(item.speaker, item.text) for item in transcript.speaker_texts]
-            chunks = chunk_transcript_rows(rows, chunk_size=chunk_size, overlap=overlap)
+            markdown_text = tx_path.read_text(encoding="utf-8")
+            chunks = self._chunk_transcript_markdown(
+                markdown_text,
+                chunk_size=chunk_size,
+                overlap=overlap,
+            )
             embedded = self._embed_for_upsert(chunks)
 
             self._upsert_document_chunks(

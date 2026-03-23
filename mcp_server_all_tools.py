@@ -156,14 +156,14 @@ def embed_sec_filings_tool(ticker: str, year: str, force: bool = False) -> dict:
 
 @mcp.tool()
 def embed_transcripts_tool(ticker: str, year: str, force: bool = False) -> dict:
-    """Build vector indexes for transcript JSONL files.
+    """Build vector indexes for transcript markdown files.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
         year: Transcript year.
         force: Whether to overwrite existing vectors for the same quarter keys.
     """
-    keys = _get_vector_index().from_earnings_transcript_jsonl(
+    keys = _get_vector_index().from_earnings_transcript_markdown(
         ticker=ticker,
         year=year,
         force=force,

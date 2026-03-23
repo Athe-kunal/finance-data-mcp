@@ -11,7 +11,7 @@ Settings are loaded via Pydantic Settings from environment variables or a `.env`
 | `OLMOCR_SERVER` | vLLM server URL for olmOCR | `http://localhost:8000/v1` |
 | `OLMOCR_MODEL` | Model name for olmOCR | `allenai/olmOCR-2-7B-1025-FP8` |
 | `OLMOCR_WORKSPACE` | Workspace directory for OCR output | `./localworkspace` |
-| `EARNINGS_TRANSCRIPTS_DIR` | Directory for fetched transcript JSONL files | `earnings_transcripts_data` |
+| `EARNINGS_TRANSCRIPTS_DIR` | Directory for fetched transcript Markdown files | `earnings_transcripts_data` |
 | `EMBEDDING_SERVER` | OpenAI-compatible embedding API (e.g. vLLM pooling) | `http://127.0.0.1:8888/v1` |
 | `EMBEDDING_MODEL` | Model id passed to the embedding server | `Qwen/Qwen3-Embedding-0.6B` |
 | `CHROMA_PERSIST_DIR` | ChromaDB persistence directory | `./chroma_db` |
@@ -159,7 +159,7 @@ uv run python ocr/olmocr_pipeline.py --pdf-dir sec_data/AMZN-2025
 
 ## Earnings call transcripts
 
-Transcripts are scraped from [discountingcashflows.com](https://discountingcashflows.com) (Playwright + Chromium). Each quarter is saved as one JSONL file under `{EARNINGS_TRANSCRIPTS_DIR}/{TICKER}/{year}/Q{n}.jsonl`.
+Transcripts are scraped from [discountingcashflows.com](https://discountingcashflows.com) (Playwright + Chromium). Each quarter is saved as one Markdown file under `{EARNINGS_TRANSCRIPTS_DIR}/{TICKER}/{year}/Q{n}_{YYYY-MM-DD}.md` (date may be `unknown-date` when unavailable).
 
 ### 1. Fetch transcripts
 
