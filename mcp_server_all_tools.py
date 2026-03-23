@@ -98,26 +98,23 @@ async def sec_main_tool(
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
         year: Filing year, typically a four-digit string.
-        filing_type: e.g. ``10-K``, ``10-Q``, or ``10-Q1``/``10-Q2``/``10-Q3``.
+        filing_type: e.g. ``10-K`` or ``10-Q1``/``10-Q2``/``10-Q3``.
             ``10-Q4`` is invalid.
     """
-    sec_results, pdf_paths = await sec_main(
+    sec_result, pdf_path = await sec_main(
         ticker=ticker,
         year=year,
         filing_type=filing_type,
     )
     return {
-        "sec_results": [
-            {
-                "dashes_acc_num": r.dashes_acc_num,
-                "form_name": r.form_name,
-                "filing_date": r.filing_date,
-                "report_date": r.report_date,
-                "primary_document": r.primary_document,
-            }
-            for r in sec_results
-        ],
-        "pdf_paths": [str(p) for p in pdf_paths],
+        "sec_result": {
+            "dashes_acc_num": sec_result.dashes_acc_num,
+            "form_name": sec_result.form_name,
+            "filing_date": sec_result.filing_date,
+            "report_date": sec_result.report_date,
+            "primary_document": sec_result.primary_document,
+        },
+        "pdf_path": str(pdf_path),
     }
 
 

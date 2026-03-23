@@ -76,23 +76,20 @@ async def earnings_transcript_for_quarter(request: EarningsTranscriptQuarterRequ
 @app.post("/sec_main")
 async def sec_main_endpoint(request: SecMainRequest):
     """Fetch SEC filings and save them as PDFs."""
-    sec_results, pdf_paths = await sec_main(
+    sec_result, pdf_path = await sec_main(
         ticker=request.ticker,
         year=request.year,
         filing_type=request.filing_type,
     )
     return {
-        "sec_results": [
-            {
-                "dashes_acc_num": r.dashes_acc_num,
-                "form_name": r.form_name,
-                "filing_date": r.filing_date,
-                "report_date": r.report_date,
-                "primary_document": r.primary_document,
-            }
-            for r in sec_results
-        ],
-        "pdf_paths": [str(p) for p in pdf_paths],
+        "sec_result": {
+            "dashes_acc_num": sec_result.dashes_acc_num,
+            "form_name": sec_result.form_name,
+            "filing_date": sec_result.filing_date,
+            "report_date": sec_result.report_date,
+            "primary_document": sec_result.primary_document,
+        },
+        "pdf_path": str(pdf_path),
     }
 
 
