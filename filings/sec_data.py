@@ -1,8 +1,7 @@
-import json
 import re
 import asyncio
 import requests
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -29,10 +28,7 @@ class SecResults:
 def _parse_filing_type_for_sec_query(
     filing_type: str,
 ) -> tuple[frozenset[int] | None, frozenset[str]]:
-    """Build SEC ``form`` names and an optional 10-Q quarter filter (1–3 from ``10-Qn``).
-
-    Plain ``10-Q`` keeps all quarters; ``10-Q4`` raises (fourth quarter is ``10-K``).
-    """
+    """Build SEC ``form`` names and an optional 10-Q quarter filter from ``10-Qn``."""
     raw = filing_type.strip()
     u = raw.upper().replace(" ", "")
     m = re.fullmatch(r"10-Q(\d)", u)
@@ -48,7 +44,9 @@ def _parse_filing_type_for_sec_query(
             )
         return frozenset({q}), frozenset({"10-Q"})
     if u == "10-Q":
-        return None, frozenset({"10-Q"})
+        raise ValueError(
+            "Use a single quarterly filing type (10-Q1, 10-Q2, or 10-Q3), not plain 10-Q."
+        )
     return None, frozenset({raw})
 
 
@@ -61,10 +59,9 @@ def get_sec_results(
 ) -> list[SecResults]:
     """Fetch SEC filing metadata for the given ticker and year.
 
-    Pass ``10-K``, plain ``10-Q`` (all ``10-Q`` filings for the year), or
-    ``10-Q1`` / ``10-Q2`` / ``10-Q3`` to restrict by fiscal quarter from
-    ``reportDate``. Only non-amended ``10-Q`` rows are included; ``10-Q4`` is not
-    allowed (use ``10-K``).
+    Pass a single filing selector such as ``10-K`` or ``10-Q1``/``10-Q2``/``10-Q3``
+    to restrict by fiscal quarter from ``reportDate``. ``10-Q4`` and plain ``10-Q``
+    are invalid in this flow.
     """
     company = company or sec_settings.sec_api_organization
     email = email or sec_settings.sec_api_email
@@ -126,13 +123,13 @@ def get_sec_results(
 
 
 async def save_sec_results_as_pdfs(
-    sec_results: list[SecResults],
+    sec_result: SecResults,
     ticker: str,
     year: str,
     company: str | None = None,
     email: str | None = None,
-) -> list[Path]:
-    """Save SEC results as PDF files and persist metadata to ``sec_results.json``."""
+) -> Path:
+    """Save one SEC filing as PDF if needed, or reuse existing PDF."""
     company = company or sec_settings.sec_api_organization
     email = email or sec_settings.sec_api_email
     cik = utils.get_cik_by_ticker(ticker)
@@ -140,14 +137,18 @@ async def save_sec_results_as_pdfs(
     output_dir = sec_data_case_dir(ticker, year)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    output_path = output_dir / f"{sec_result.form_name}.pdf"
+    if output_path.exists():
+        logger.info(f"PDF already exists, skipping download: {output_path}")
+        return output_path
+
     filings_to_save = [
         utils.FilingToSave(
             cik=rgld_cik,
-            accession_number=sr.dashes_acc_num,
-            primary_document=sr.primary_document,
-            output_path=output_dir / f"{sr.form_name}.pdf",
+            accession_number=sec_result.dashes_acc_num,
+            primary_document=sec_result.primary_document,
+            output_path=output_path,
         )
-        for sr in sec_results
     ]
 
     pdf_paths = await utils.save_filings_as_pdfs(
@@ -155,40 +156,35 @@ async def save_sec_results_as_pdfs(
         company=company,
         email=email,
     )
-
-    # Persist metadata so filing dates are available without re-hitting SEC API.
-    json_path = output_dir / sec_settings.sec_metadata_filename
-    json_path.write_text(
-        json.dumps([asdict(sr) for sr in sec_results], indent=2),
-        encoding="utf-8",
-    )
-
-    logger.info(f"Saved {len(pdf_paths)} PDFs and metadata to {output_dir}")
-    return pdf_paths
+    if not pdf_paths:
+        raise RuntimeError(f"Failed to save PDF for {ticker} {year} {sec_result.form_name}")
+    logger.info(f"Saved SEC PDF to {output_path}")
+    return pdf_paths[0]
 
 
 def load_sec_results(ticker: str, year: str) -> list[SecResults]:
-    """Load previously persisted SEC filing metadata from ``sec_results.json``.
-
-    Returns an empty list if the file does not yet exist (i.e. filings have
-    not been downloaded yet for this ticker/year).
-    """
-    json_path = sec_data_case_dir(ticker, year) / sec_settings.sec_metadata_filename
-    if not json_path.exists():
-        return []
-    records = json.loads(json_path.read_text(encoding="utf-8"))
-    return [SecResults(**r) for r in records]
+    """Load filing metadata from SEC API for known per-filing types for this year."""
+    filing_types = ("10-K", "10-Q1", "10-Q2", "10-Q3")
+    results: list[SecResults] = []
+    for filing_type in filing_types:
+        try:
+            results.extend(get_sec_results(ticker=ticker, year=year, filing_type=filing_type))
+        except Exception as exc:
+            logger.debug(
+                f"Skipping metadata lookup for {ticker=} {year=} {filing_type=}: {exc}"
+            )
+    return results
 
 
 async def sec_main(
     ticker: str,
     year: str,
     filing_type: str = "10-K",
-) -> tuple[list[SecResults], list[Path]]:
-    """Fetch SEC results and save them as PDFs.
+) -> tuple[SecResults, Path]:
+    """Fetch one SEC filing result and ensure its PDF exists.
 
-    Use ``10-Q1``, ``10-Q2``, or ``10-Q3`` to fetch one quarter (from report date);
-    ``10-Q`` fetches all quarterly filings for the year.
+    ``filing_type`` should identify a single filing type, for example
+    ``10-K`` or one of ``10-Q1``/``10-Q2``/``10-Q3``.
     """
     ticker_name = utils.company_to_ticker(ticker)
     assert ticker_name, f"The {ticker=} that you provided, is not valid"
@@ -197,12 +193,23 @@ async def sec_main(
         year=year,
         filing_type=filing_type,
     )
-    pdf_paths = await save_sec_results_as_pdfs(
-        sec_results=sec_results,
+    if not sec_results:
+        raise FileNotFoundError(
+            f"No SEC filing found for ticker={ticker}, year={year}, filing_type={filing_type}."
+        )
+    sec_result = sec_results[0]
+    if len(sec_results) > 1:
+        logger.warning(
+            f"Multiple filings matched {ticker=} {year=} {filing_type=}; using first: "
+            f"{sec_result.form_name} {sec_result.filing_date}"
+        )
+
+    pdf_path = await save_sec_results_as_pdfs(
+        sec_result=sec_result,
         ticker=ticker,
         year=year,
     )
-    return sec_results, pdf_paths
+    return sec_result, pdf_path
 
 
 if __name__ == "__main__":
@@ -215,7 +222,7 @@ if __name__ == "__main__":
         "--filing-type",
         type=str,
         default="10-K",
-        help="SEC form to fetch (e.g. 10-K, 10-Q, 10-Q1, 10-Q2, 10-Q3)",
+        help="SEC form to fetch (e.g. 10-K, 10-Q1, 10-Q2, 10-Q3)",
     )
     args = parser.parse_args()
 
