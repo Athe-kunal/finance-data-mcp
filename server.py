@@ -1,24 +1,44 @@
+import asyncio
 import dataclasses
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, field_validator
 
 from dataloader.text_splitter import Chunk
 from dataloader.vector_store import ChromaVectorStore
-from earnings_transcripts.transcripts import (
-    get_transcript_for_quarter_async,
-    quarter_label_to_num,
-)
-from filings.utils import company_to_ticker
+from earnings_transcripts.transcripts import get_transcript_for_quarter_async
 from filings.sec_data import (
     sec_main,
     sec_main_to_markdown,
     sec_main_to_markdown_and_embed,
 )
+from filings.utils import company_to_ticker
 from ocr.olmocr_pipeline import run_olmo_ocr
+from server_api.batch_jobs import (
+    expand_earnings_batch_jobs,
+    expand_sec_batch_jobs,
+    run_earnings_transcript_job,
+    run_sec_markdown_embed_job,
+    serialize_sec_result,
+)
+from server_api.models import (
+    BatchEarningsTranscriptsRequest,
+    BatchSecFilingsRequest,
+    ChunkResult,
+    CompanyNameRequest,
+    EarningsTranscriptQuarterRequest,
+    RunOlmoOcrRequest,
+    SecFilingsEmbedRequest,
+    SecFilingsListRequest,
+    SecFilingsSearchRequest,
+    SecMainRequest,
+    SecMainToMarkdownEmbedRequest,
+    SecMainToMarkdownRequest,
+    TranscriptEmbedRequest,
+    TranscriptSearchRequest,
+)
 from settings import sec_settings
 
 vector_index: ChromaVectorStore
@@ -34,10 +54,6 @@ async def lifespan(app: FastAPI):  # noqa: F811
 app = FastAPI(lifespan=lifespan)
 
 
-class CompanyNameRequest(BaseModel):
-    name: str
-
-
 @app.post("/company_name_to_ticker")
 def company_name_to_ticker(request: CompanyNameRequest):
     """Resolve a company name to its stock ticker symbol."""
@@ -45,23 +61,6 @@ def company_name_to_ticker(request: CompanyNameRequest):
     if ticker is None:
         raise HTTPException(status_code=404, detail="No ticker found for company name")
     return {"ticker": ticker}
-
-
-class SecMainRequest(BaseModel):
-    ticker: str
-    year: str
-    filing_type: str = "10-K"
-
-
-class EarningsTranscriptQuarterRequest(BaseModel):
-    ticker: str
-    year: int
-    quarter: str
-
-    @field_validator("quarter")
-    @classmethod
-    def validate_quarter_label(cls, value: str) -> str:
-        return f"Q{quarter_label_to_num(value)}"
 
 
 @app.post("/earnings_transcripts/for_quarter")
@@ -74,7 +73,12 @@ async def earnings_transcript_for_quarter(request: EarningsTranscriptQuarterRequ
             status_code=404,
             detail="Transcript not available for this ticker, year, and quarter",
         )
-    return dataclasses.asdict(transcript)
+    return {
+        "ticker": request.ticker,
+        "year": request.year,
+        "quarter": request.quarter,
+        "transcript": dataclasses.asdict(transcript),
+    }
 
 
 @app.post("/sec_main")
@@ -86,21 +90,9 @@ async def sec_main_endpoint(request: SecMainRequest):
         filing_type=request.filing_type,
     )
     return {
-        "sec_result": {
-            "dashes_acc_num": sec_result.dashes_acc_num,
-            "form_name": sec_result.form_name,
-            "filing_date": sec_result.filing_date,
-            "report_date": sec_result.report_date,
-            "primary_document": sec_result.primary_document,
-        },
+        "sec_result": serialize_sec_result(sec_result),
         "pdf_path": str(pdf_path),
     }
-
-
-class SecMainToMarkdownRequest(BaseModel):
-    ticker: str
-    year: str
-    filing_type: str = "10-K"
 
 
 @app.post("/sec_main_to_markdown")
@@ -112,24 +104,11 @@ async def sec_main_to_markdown_endpoint(request: SecMainToMarkdownRequest):
     )
     sec_result = payload["sec_result"]
     return {
-        "sec_result": {
-            "dashes_acc_num": sec_result.dashes_acc_num,
-            "form_name": sec_result.form_name,
-            "filing_date": sec_result.filing_date,
-            "report_date": sec_result.report_date,
-            "primary_document": sec_result.primary_document,
-        },
+        "sec_result": serialize_sec_result(sec_result),
         "pdf_path": str(payload["pdf_path"]),
         "markdown_path": str(payload["markdown_path"]),
         "markdown": payload["markdown_text"],
     }
-
-
-class SecMainToMarkdownEmbedRequest(BaseModel):
-    ticker: str
-    year: str
-    filing_type: str = "10-K"
-    force: bool = False
 
 
 @app.post("/sec_main_to_markdown_and_embed")
@@ -144,21 +123,64 @@ async def sec_main_to_markdown_and_embed_endpoint(
     )
     sec_result = payload["sec_result"]
     return {
-        "sec_result": {
-            "dashes_acc_num": sec_result.dashes_acc_num,
-            "form_name": sec_result.form_name,
-            "filing_date": sec_result.filing_date,
-            "report_date": sec_result.report_date,
-            "primary_document": sec_result.primary_document,
-        },
+        "sec_result": serialize_sec_result(sec_result),
         "pdf_path": str(payload["pdf_path"]),
         "markdown_path": str(payload["markdown_path"]),
         "embedded": payload["embedded"],
     }
 
 
-class RunOlmoOcrRequest(BaseModel):
-    pdf_dir: str
+@app.post("/sec_main_to_markdown_and_embed/batch")
+async def sec_main_to_markdown_and_embed_batch_endpoint(
+    request: BatchSecFilingsRequest,
+):
+    """Run SEC download + markdown + embedding jobs in parallel."""
+    jobs = expand_sec_batch_jobs(request.requests)
+    tasks = [
+        run_sec_markdown_embed_job(
+            ticker=ticker,
+            year=year,
+            filing_type=filing_type,
+            force=force,
+        )
+        for ticker, year, filing_type, force in jobs
+    ]
+    results = await asyncio.gather(*tasks)
+    success_count = sum(1 for item in results if item["status"] == "success")
+    error_count = len(results) - success_count
+    return {
+        "total_jobs": len(results),
+        "success_count": success_count,
+        "error_count": error_count,
+        "results": results,
+    }
+
+
+@app.post("/earnings_transcripts/for_quarter/batch")
+async def earnings_transcript_for_quarter_batch(
+    request: BatchEarningsTranscriptsRequest,
+):
+    """Run earnings transcript downloads in parallel for all combinations."""
+    jobs = expand_earnings_batch_jobs(request.requests)
+    tasks = [
+        run_earnings_transcript_job(
+            ticker=ticker,
+            year=year,
+            quarter=quarter,
+        )
+        for ticker, year, quarter in jobs
+    ]
+    results = await asyncio.gather(*tasks)
+    success_count = sum(1 for item in results if item["status"] == "success")
+    not_found_count = sum(1 for item in results if item["status"] == "not_found")
+    error_count = len(results) - success_count - not_found_count
+    return {
+        "total_jobs": len(results),
+        "success_count": success_count,
+        "not_found_count": not_found_count,
+        "error_count": error_count,
+        "results": results,
+    }
 
 
 @app.post("/run_olmo_ocr")
@@ -187,32 +209,6 @@ def delete_worker_locks():
         "status": "deleted" if existed else "not_found",
         "worker_locks_dir": str(worker_locks_dir),
     }
-
-
-class SecFilingsEmbedRequest(BaseModel):
-    """Build ChromaDB vectors from OCR markdown under the workspace.
-
-    Reads all ``*.md`` in
-    ``{olmocr_workspace}/markdown/{sec_data_dir}/{ticker}-{year}/``.
-    Filing type is each file's stem (e.g. ``10-Q1.md`` → ``"10-Q1"``).
-    """
-
-    ticker: str
-    year: str
-    force: bool = False
-
-
-class TranscriptEmbedRequest(BaseModel):
-    ticker: str
-    year: str
-    force: bool = False
-
-
-class TranscriptSearchRequest(BaseModel):
-    ticker: str
-    year: str
-    query: str
-    top_k: int = 5
 
 
 @app.post("/vector_store/embed_sec_filings")
@@ -260,11 +256,6 @@ def embed_transcripts(request: TranscriptEmbedRequest):
     }
 
 
-class SecFilingsListRequest(BaseModel):
-    ticker: str
-    year: str
-
-
 @app.post("/vector_store/list_sec_filings")
 def list_sec_filings(request: SecFilingsListRequest):
     """List ingested SEC filing types for a ticker and year.
@@ -272,24 +263,6 @@ def list_sec_filings(request: SecFilingsListRequest):
     Returns each filing's type and its SEC submission date.
     """
     return vector_index.list_filings(request.ticker, request.year)
-
-
-class SecFilingsSearchRequest(BaseModel):
-    ticker: str
-    year: str
-    filing_type: str
-    query: str
-    top_k: int = 5
-
-
-class ChunkResult(BaseModel):
-    text: str
-    chunk_type: str
-    page_num: int | None
-    section_title: str | None
-    chunk_index: int
-    score: float
-    filing_type: str | None = None
 
 
 @app.post("/vector_store/search_sec_filings", response_model=list[ChunkResult])
