@@ -13,7 +13,11 @@ from earnings_transcripts.transcripts import (
     quarter_label_to_num,
 )
 from filings.utils import company_to_ticker
-from filings.sec_data import sec_main
+from filings.sec_data import (
+    sec_main,
+    sec_main_to_markdown,
+    sec_main_to_markdown_and_embed,
+)
 from ocr.olmocr_pipeline import run_olmo_ocr
 from settings import sec_settings
 
@@ -90,6 +94,66 @@ async def sec_main_endpoint(request: SecMainRequest):
             "primary_document": sec_result.primary_document,
         },
         "pdf_path": str(pdf_path),
+    }
+
+
+class SecMainToMarkdownRequest(BaseModel):
+    ticker: str
+    year: str
+    filing_type: str = "10-K"
+
+
+@app.post("/sec_main_to_markdown")
+async def sec_main_to_markdown_endpoint(request: SecMainToMarkdownRequest):
+    payload = await sec_main_to_markdown(
+        ticker=request.ticker,
+        year=request.year,
+        filing_type=request.filing_type,
+    )
+    sec_result = payload["sec_result"]
+    return {
+        "sec_result": {
+            "dashes_acc_num": sec_result.dashes_acc_num,
+            "form_name": sec_result.form_name,
+            "filing_date": sec_result.filing_date,
+            "report_date": sec_result.report_date,
+            "primary_document": sec_result.primary_document,
+        },
+        "pdf_path": str(payload["pdf_path"]),
+        "markdown_path": str(payload["markdown_path"]),
+        "markdown": payload["markdown_text"],
+    }
+
+
+class SecMainToMarkdownEmbedRequest(BaseModel):
+    ticker: str
+    year: str
+    filing_type: str = "10-K"
+    force: bool = False
+
+
+@app.post("/sec_main_to_markdown_and_embed")
+async def sec_main_to_markdown_and_embed_endpoint(
+    request: SecMainToMarkdownEmbedRequest,
+):
+    payload = await sec_main_to_markdown_and_embed(
+        ticker=request.ticker,
+        year=request.year,
+        filing_type=request.filing_type,
+        force=request.force,
+    )
+    sec_result = payload["sec_result"]
+    return {
+        "sec_result": {
+            "dashes_acc_num": sec_result.dashes_acc_num,
+            "form_name": sec_result.form_name,
+            "filing_date": sec_result.filing_date,
+            "report_date": sec_result.report_date,
+            "primary_document": sec_result.primary_document,
+        },
+        "pdf_path": str(payload["pdf_path"]),
+        "markdown_path": str(payload["markdown_path"]),
+        "embedded": payload["embedded"],
     }
 
 

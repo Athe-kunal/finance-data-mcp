@@ -10,7 +10,11 @@ from earnings_transcripts.transcripts import (
     get_transcript_for_quarter_async,
 )
 from mcp.server.transport_security import TransportSecuritySettings
-from filings.sec_data import sec_main
+from filings.sec_data import (
+    sec_main,
+    sec_main_to_markdown,
+    sec_main_to_markdown_and_embed,
+)
 from filings.utils import company_to_ticker
 from settings import sec_settings
 
@@ -121,6 +125,19 @@ async def sec_main_tool(
         },
         "pdf_path": str(pdf_path),
     }
+
+
+@mcp.tool()
+async def sec_main_to_markdown_tool(
+    ticker: str,
+    year: str,
+    filing_type: str = "10-K",
+) -> dict:
+    """Download one SEC filing PDF (if needed), OCR to markdown (if needed), and return markdown."""
+    payload = await sec_main_to_markdown(
+        ticker=ticker, year=year, filing_type=filing_type
+    )
+    return payload["markdown_text"]
 
 
 @mcp.tool()

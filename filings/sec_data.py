@@ -4,6 +4,7 @@ import requests
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -198,6 +199,73 @@ async def sec_main(
         year=year,
     )
     return sec_result, pdf_path
+
+
+def sec_markdown_path_for_pdf(pdf_path: str | Path) -> Path:
+    """Resolve olmOCR markdown output path for a filing PDF path."""
+    from ocr.olmocr_pipeline import get_markdown_path
+
+    return Path(get_markdown_path(sec_settings.olmocr_workspace, str(pdf_path)))
+
+
+async def sec_main_to_markdown(
+    ticker: str,
+    year: str,
+    filing_type: str = "10-K",
+) -> dict[str, Any]:
+    """Ensure one SEC filing is downloaded and OCR markdown exists, then return markdown."""
+    from ocr.olmocr_pipeline import run_olmo_ocr
+
+    sec_result, pdf_path = await sec_main(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+    )
+    markdown_path = sec_markdown_path_for_pdf(pdf_path)
+
+    if not markdown_path.exists():
+        await run_olmo_ocr(pdf_dir=str(Path(pdf_path).parent))
+
+    if not markdown_path.exists():
+        raise FileNotFoundError(f"Markdown output not found after OCR: {markdown_path}")
+
+    markdown_text = markdown_path.read_text(encoding="utf-8")
+    return {
+        "sec_result": sec_result,
+        "pdf_path": Path(pdf_path),
+        "markdown_path": markdown_path,
+        "markdown_text": markdown_text,
+    }
+
+
+async def sec_main_to_markdown_and_embed(
+    ticker: str,
+    year: str,
+    filing_type: str = "10-K",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Ensure SEC filing markdown exists, then embed it into ChromaDB."""
+    from dataloader.vector_store import ChromaVectorStore, IndexKey
+
+    payload = await sec_main_to_markdown(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+    )
+    vector_store = ChromaVectorStore()
+    embedded_keys = vector_store.from_markdown_sec_filing(
+        ticker=ticker,
+        year=year,
+        filing_type=payload["sec_result"].form_name,
+        markdown_path=payload["markdown_path"],
+        filing_date=payload["sec_result"].filing_date,
+        force=force,
+    )
+    payload["embedded"] = [
+        {"ticker": k.ticker, "year": k.year, "filing_type": k.filing_type}
+        for k in embedded_keys
+    ]
+    return payload
 
 
 if __name__ == "__main__":
