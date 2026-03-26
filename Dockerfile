@@ -30,9 +30,9 @@ RUN uv run playwright install chromium --with-deps
 COPY . .
 
 RUN chmod +x /app/entrypoint.sh \
-    && mkdir -p /app/sec_data /app/localworkspace
+    && mkdir -p /app/sec_data /app/localworkspace /app/earnings_transcripts_data
 
-VOLUME ["/app/sec_data", "/app/localworkspace"]
+VOLUME ["/app/sec_data", "/app/localworkspace", "/app/earnings_transcripts_data"]
 
 EXPOSE 8000 8081
 
