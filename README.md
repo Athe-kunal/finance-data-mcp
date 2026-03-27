@@ -17,7 +17,7 @@ Settings are loaded via Pydantic Settings from environment variables or a `.env`
 | `CHROMA_PERSIST_DIR` | ChromaDB persistence directory | `./chroma_db` |
 | `MCP_HOST` | Bind address for the MCP HTTP server | `127.0.0.1` |
 | `MCP_PORT` | Listen port for the MCP HTTP server | `8069` |
-| `MCP_NGROK_ALLOWED_HOSTS` | JSON list of extra `Host` values allowed through the tunnel (see MCP section) | (see `settings.py`) |
+| `MCP_NGROK_ALLOWED_HOSTS` | JSON list of extra `Host` values allowed through the tunnel (see MCP section) | (see `finance_data/settings.py`) |
 
 
 ## MCP server

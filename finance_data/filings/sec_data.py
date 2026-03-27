@@ -9,7 +9,7 @@ from typing import Any
 from loguru import logger
 
 from . import utils
-from settings import sec_settings
+from finance_data.settings import sec_settings
 from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from finance_data.dataloader.vector_store import ChromaVectorStore, IndexKey
 

@@ -1,6 +1,6 @@
 ## Repository layout
 - **`finance_data/`** — library package: `filings/` (SEC download + helpers), `ocr/` (olmOCR pipeline), `dataloader/` (chunking, Chroma), `earnings_transcripts/`, `server_api/` (FastAPI models and batch helpers), `finance_data_api/` (packaged CLI entry only).
-- **Repo root** — `server.py` (FastAPI app), `mcp_server.py` (MCP entrypoint), `settings.py` (shared env/settings). These top-level modules are listed in `pyproject.toml` alongside the `finance_data*` packages.
+- **Repo root** — `server.py` (FastAPI app), `mcp_server.py` (MCP entrypoint). Shared env/settings live in `finance_data/settings.py` (`finance_data.settings`). Root entry modules are listed under `py-modules` in `pyproject.toml`; library code under `finance_data*` is discovered via `packages.find`.
 
 ## Dev environment tips
 - This repository is Python-first and uses `uv` for environment and dependency management.
@@ -8,7 +8,7 @@
 - Run `uv sync --group ocr-md` when working on OCR/embedding pipelines.
 - Run `uv sync --group ocr-md --group mcp` when working on the MCP server.
 - Use `uv run <command>` so commands execute inside the managed project environment.
-- Keep runtime configuration in environment variables or `.env` (see `settings.py` and `README.md`).
+- Keep runtime configuration in environment variables or `.env` (see `finance_data/settings.py` and `README.md`).
 - Prefer `Makefile` targets for model serving, API serving, benchmarking, and Docker workflows.
 
 ## Testing instructions

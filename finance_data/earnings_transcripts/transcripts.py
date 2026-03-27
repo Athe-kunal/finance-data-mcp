@@ -21,7 +21,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from settings import sec_settings
+from finance_data.settings import sec_settings
 
 
 @dataclasses.dataclass

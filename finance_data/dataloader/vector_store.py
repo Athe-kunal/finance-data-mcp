@@ -15,7 +15,7 @@ from openai import OpenAI
 
 from finance_data.dataloader.text_splitter import Chunk, chunk_markdown
 from finance_data.earnings_transcripts.transcripts import Transcript
-from settings import sec_settings
+from finance_data.settings import sec_settings
 
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048

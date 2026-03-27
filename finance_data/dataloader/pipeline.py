@@ -12,7 +12,7 @@ from finance_data.filings.sec_data import (
     save_sec_results_as_pdfs,
 )
 from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
-from settings import sec_settings
+from finance_data.settings import sec_settings
 
 from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
 

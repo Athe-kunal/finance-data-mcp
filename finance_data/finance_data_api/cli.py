@@ -2,7 +2,7 @@
 
 import uvicorn
 
-from settings import sec_settings
+from finance_data.settings import sec_settings
 
 
 def main() -> None:

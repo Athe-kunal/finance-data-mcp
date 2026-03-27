@@ -42,7 +42,7 @@ from olmocr.train.dataloader import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, WorkQueue
 
-from settings import sec_settings
+from finance_data.settings import sec_settings
 
 DEFAULT_SERVER = sec_settings.olmocr_server
 DEFAULT_MODEL = sec_settings.olmocr_model

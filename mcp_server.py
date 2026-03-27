@@ -17,7 +17,7 @@ from finance_data.filings.sec_data import (
     sec_main_to_markdown_and_embed,
 )
 from finance_data.filings.utils import company_to_ticker
-from settings import sec_settings
+from finance_data.settings import sec_settings
 
 _vector_index: ChromaVectorStore | None = None
 _RESOURCE_HINT = (
@@ -137,7 +137,7 @@ def _all_resources_payload() -> dict[str, object]:
     ),
 )
 def all_resources_catalog() -> str:
-    """List all available SEC/transcript resources based on ``settings.py`` paths."""
+    """List all available SEC/transcript resources based on ``finance_data.settings`` paths."""
     return json.dumps(_all_resources_payload(), indent=2)
 
 

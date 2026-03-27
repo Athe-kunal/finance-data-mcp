@@ -41,7 +41,7 @@ from finance_data.server_api.models import (
     TranscriptEmbedRequest,
     TranscriptSearchRequest,
 )
-from settings import sec_settings
+from finance_data.settings import sec_settings
 
 vector_index: ChromaVectorStore
 
