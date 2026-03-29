@@ -1,28 +1,28 @@
 MODEL := allenai/olmOCR-2-7B-1025-FP8
 EMBD_MODEL := Qwen/Qwen3-Embedding-0.6B
 
-GPU_MEMORY_UTILIZATION ?= 0.5
+GPU_MEMORY_UTILIZATION      ?= 0.5
 EMBD_GPU_MEMORY_UTILIZATION ?= 0.1
-MAX_MODEL_LEN          ?= 16384
-TENSOR_PARALLEL_SIZE   ?= 1
-DATA_PARALLEL_SIZE     ?= 1
-PORT                   ?= 8000
-EMBD_PORT			   ?= 8002
-API_PORT               ?= 8081
-SERVER                 ?= localhost
-IMAGE_NAME             ?= sec-filings-md
-GPU_DEVICE             ?= 3
-SEC_API_ORGANIZATION   ?= Your-Organization
-SEC_API_EMAIL          ?= your-email@example.com
+MAX_MODEL_LEN               ?= 8192
+TENSOR_PARALLEL_SIZE        ?= 1
+DATA_PARALLEL_SIZE          ?= 1
+PORT                        ?= 8000
+EMBD_PORT                   ?= 8002
+API_PORT                    ?= 8081
+SERVER                      ?= localhost
+IMAGE_NAME                  ?= sec-filings-md
+GPU_DEVICE                  ?= 3
+SEC_API_ORGANIZATION        ?= Your-Organization
+SEC_API_EMAIL               ?= your-email@example.com
 
 .PHONY: vllm-olmocr-serve
 vllm-olmocr-serve:
-	uv run vllm serve $(MODEL) \
+	CUDA_VISIBLE_DEVICES=$(GPU_DEVICE) uv run vllm serve $(MODEL) \
 		--gpu-memory-utilization $(GPU_MEMORY_UTILIZATION) \
 		--max-model-len $(MAX_MODEL_LEN) \
 		--tensor-parallel-size $(TENSOR_PARALLEL_SIZE) \
 		--data-parallel-size $(DATA_PARALLEL_SIZE) \
-		--max-num-batched-tokens 32768 \
+		--max-num-batched-tokens 65536 \
 		--mm-encoder-tp-mode "data" \
 		--limit-mm-per-prompt '{"video": 0}' \
 		--max-num-seqs 8192 \
@@ -31,7 +31,7 @@ vllm-olmocr-serve:
 
 .PHONY: vllm-embd-serve
 vllm-embd-serve:
-	uv run vllm serve $(EMBD_MODEL) \
+	CUDA_VISIBLE_DEVICES=$(GPU_DEVICE) uv run vllm serve $(EMBD_MODEL) \
 		--gpu-memory-utilization $(EMBD_GPU_MEMORY_UTILIZATION) \
 		--runner pooling \
 		--max-model-len 8192 \
@@ -58,7 +58,8 @@ docker-build:
 
 .PHONY: docker-run
 docker-run:
-	docker run --gpus device=$(GPU_DEVICE) \
+	docker run --gpus all \
+		-e GPU_DEVICE="$(GPU_DEVICE)" \
 		-e SEC_API_ORGANIZATION="$(SEC_API_ORGANIZATION)" \
 		-e SEC_API_EMAIL="$(SEC_API_EMAIL)" \
 		-v ./sec_data:/app/sec_data \

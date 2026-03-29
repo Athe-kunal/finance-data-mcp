@@ -289,6 +289,13 @@ def search_sec_filings_tool(
 ) -> str:
     """Run semantic search over one indexed SEC filing.
 
+    **Prerequisite — data must be indexed before searching:**
+    Before calling this tool, verify the filing has been downloaded, OCR-ed, and
+    embedded. If the filing is missing or the search returns no results:
+      1. Call ``sec_main_to_markdown_and_embed_tool(ticker, year, filing_type)``
+         to download, OCR, and embed the filing.
+      2. Retry this search tool with the same arguments.
+
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
         year: Filing year.
@@ -310,6 +317,14 @@ def search_sec_filings_tool(
 def search_transcripts_tool(ticker: str, year: str, query: str, top_k: int = 5) -> str:
     """Run semantic search across all indexed transcript quarters.
 
+    **Prerequisite — transcripts must be indexed before searching:**
+    Before calling this tool, verify that at least one quarterly transcript for the
+    given ticker and year has been fetched and embedded. If no transcripts are indexed
+    or the search returns no results:
+      1. Call ``earnings_transcript_for_quarter_tool(ticker, year, quarter)`` for each
+         quarter of interest (Q1 through Q4) to fetch, save, and embed transcripts.
+      2. Retry this search tool with the same arguments.
+
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
         year: Transcript year.
@@ -319,6 +334,7 @@ def search_transcripts_tool(ticker: str, year: str, query: str, top_k: int = 5) 
     year_s = str(year).strip()
     vector_index = _get_vector_index()
     resolved = vector_index.resolve_transcript_quarters(ticker, year_s)
+
     if not resolved:
         raise FileNotFoundError("No transcript indexes (Q1–Q4) for this ticker/year.")
 

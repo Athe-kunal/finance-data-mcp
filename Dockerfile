@@ -34,6 +34,6 @@ RUN chmod +x /app/entrypoint.sh \
 
 VOLUME ["/app/sec_data", "/app/localworkspace", "/app/earnings_transcripts_data"]
 
-EXPOSE 8000 8081
+EXPOSE 8000 8002 8081
 
 ENTRYPOINT ["/app/entrypoint.sh"]
