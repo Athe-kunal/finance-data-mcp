@@ -46,7 +46,7 @@ async def ensure_sec_data(
     Returns:
         (sec_results matching filing_type, paths to all PDFs)
     """
-    sec_results = get_sec_results(
+    sec_results = await get_sec_results(
         ticker=ticker,
         year=year,
         filing_type=filing_type,

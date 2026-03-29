@@ -1,11 +1,10 @@
 import re
 import asyncio
-import requests
 from typing import Final, NamedTuple, Optional, Union
 from pathlib import Path
 import os
+import aiohttp
 from loguru import logger
-from ratelimit import limits, sleep_and_retry
 import yfinance as yf
 from playwright.async_api import async_playwright, Browser
 
@@ -52,28 +51,24 @@ def archive_url(cik: Union[str, int], accession_number: Union[str, int]) -> str:
     return f"{SEC_ARCHIVE_URL}/{cik}/{accession_number}/{filename}"
 
 
-def _get_session(
+def _sec_request_headers(
     company: Optional[str] = "Indiana-University-Bloomington",
     email: Optional[str] = "athecolab@gmail.com",
-) -> requests.Session:
-    """Creates a requests sessions with the appropriate headers set."""
+) -> dict[str, str]:
+    """Build SEC request headers with a valid user agent."""
     if company is None:
         company = os.environ.get("SEC_API_ORGANIZATION")
     if email is None:
         email = os.environ.get("SEC_API_EMAIL")
     assert company
     assert email
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": f"{company} {email}",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-        }
-    )
-    return session
+    return {
+        "User-Agent": f"{company} {email}",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    }
 
 
 def _search_url(cik: Union[str, int]) -> str:
@@ -82,21 +77,17 @@ def _search_url(cik: Union[str, int]) -> str:
     return url
 
 
-@sleep_and_retry
-@limits(calls=2, period=1)
-def get_cik_by_ticker(ticker: str) -> str:
+async def get_cik_by_ticker(ticker: str) -> str:
     """Gets a CIK number from a stock ticker by running a search on the SEC website."""
     cik_re = re.compile(r".*CIK=(\d{10}).*")
     url = _search_url(ticker)
-    company = "Indiana-University-Bloomington"
-    email = "athecolab@gmail.com"
-    headers = {
-        "User-Agent": f"{company} {email}",
-        "Content-Type": "text/html",
-    }
-    response = requests.get(url, stream=True, headers=headers)
-    response.raise_for_status()
-    results = cik_re.findall(response.text)
+    headers = _sec_request_headers()
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url, headers=headers) as response:
+            response.raise_for_status()
+            response_text = await response.text()
+    results = cik_re.findall(response_text)
     if not results:
         raise ValueError(f"Couldn't find the CIK for {ticker=}")
     return str(results[0])
@@ -143,19 +134,46 @@ class DownloadedFiling(NamedTuple):
     output_path: Path
 
 
-def _download_filing_html(
+async def _download_filing_html(
     filing: FilingToSave,
+    session: aiohttp.ClientSession,
     headers: dict[str, str],
+    sem: asyncio.Semaphore,
 ) -> DownloadedFiling:
     output_path = Path(filing.output_path)
     url = document_url(filing.cik, filing.accession_number, filing.primary_document)
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
+    async with sem:
+        async with session.get(url, headers=headers) as response:
+            response.raise_for_status()
+            response_text = await response.text()
     return DownloadedFiling(
-        html_content=response.text,
+        html_content=response_text,
         base_url=url,
         output_path=output_path,
     )
+
+
+async def _download_filing_html_with_logging(
+    filing: FilingToSave,
+    session: aiohttp.ClientSession,
+    headers: dict[str, str],
+    sem: asyncio.Semaphore,
+) -> Optional[DownloadedFiling]:
+    """Download one filing with structured logging and error handling."""
+    url = document_url(filing.cik, filing.accession_number, filing.primary_document)
+    logger.info(f"Fetching {url}")
+    try:
+        downloaded_filing = await _download_filing_html(
+            filing=filing,
+            session=session,
+            headers=headers,
+            sem=sem,
+        )
+        logger.info(f"Downloaded HTML: {url}")
+        return downloaded_filing
+    except Exception as exc:
+        logger.error(f"Failed loading SEC filing HTML from {url}: {exc}")
+        return None
 
 
 async def download_filings_html_contents(
@@ -169,31 +187,20 @@ async def download_filings_html_contents(
         return []
 
     sem = asyncio.Semaphore(max_concurrent)
-    headers = dict(_get_session(company, email).headers)
-
-    async def _download_one(filing: FilingToSave) -> Optional[DownloadedFiling]:
-        async with sem:
-            url = document_url(
-                filing.cik,
-                filing.accession_number,
-                filing.primary_document,
-            )
-            logger.info(f"Fetching {url}")
-            try:
-                downloaded_filing = await asyncio.to_thread(
-                    _download_filing_html,
-                    filing,
-                    headers,
+    headers = _sec_request_headers(company, email)
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        downloaded_filings = await asyncio.gather(
+            *[
+                _download_filing_html_with_logging(
+                    filing=filing,
+                    session=session,
+                    headers=headers,
+                    sem=sem,
                 )
-                logger.info(f"Downloaded HTML: {url}")
-                return downloaded_filing
-            except Exception as exc:
-                logger.error(f"Failed loading SEC filing HTML from {url}: {exc}")
-                return None
-
-    downloaded_filings = await asyncio.gather(
-        *[_download_one(filing) for filing in filings]
-    )
+                for filing in filings
+            ]
+        )
     return [filing for filing in downloaded_filings if filing is not None]
 
 

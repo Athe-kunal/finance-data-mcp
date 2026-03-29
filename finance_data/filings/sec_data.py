@@ -1,6 +1,6 @@
 import re
 import asyncio
-import requests
+import aiohttp
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -53,7 +53,7 @@ def _parse_filing_type_for_sec_query(
     return None, frozenset({raw})
 
 
-def get_sec_results(
+async def get_sec_results(
     ticker: str,
     year: str,
     filing_type: str = "10-K",
@@ -68,7 +68,7 @@ def get_sec_results(
     """
     company = company or sec_settings.sec_api_organization
     email = email or sec_settings.sec_api_email
-    cik = utils.get_cik_by_ticker(ticker)
+    cik = await utils.get_cik_by_ticker(ticker)
     logger.info(f"For {ticker=} found {cik=}")
 
     quarter_filter, forms = _parse_filing_type_for_sec_query(filing_type)
@@ -78,14 +78,14 @@ def get_sec_results(
         "User-Agent": f"{company} {email}",
         "Content-Type": "text/html",
     }
-    response = requests.get(url, headers=headers)
-
-    if response.status_code == 200:
-        json_data = response.json()
-    else:
-        raise RuntimeError(
-            f"Unable to fetch submissions. Status code: {response.status_code}"
-        )
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url, headers=headers) as response:
+            if response.status != 200:
+                raise RuntimeError(
+                    f"Unable to fetch submissions. Status code: {response.status}"
+                )
+            json_data = await response.json()
 
     filings = json_data["filings"]
     recent_filings = filings["recent"]
@@ -135,7 +135,7 @@ async def save_sec_results_as_pdfs(
     """Save one SEC filing as PDF if needed, or reuse existing PDF."""
     company = company or sec_settings.sec_api_organization
     email = email or sec_settings.sec_api_email
-    cik = utils.get_cik_by_ticker(ticker)
+    cik = await utils.get_cik_by_ticker(ticker)
     rgld_cik = int(cik.lstrip("0"))
     output_dir = sec_data_case_dir(ticker, year)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +179,7 @@ async def sec_main(
     """
     ticker_name = utils.company_to_ticker(ticker)
     assert ticker_name, f"The {ticker=} that you provided, is not valid"
-    sec_results = get_sec_results(
+    sec_results = await get_sec_results(
         ticker=ticker,
         year=year,
         filing_type=filing_type,
