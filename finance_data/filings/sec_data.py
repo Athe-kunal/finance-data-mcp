@@ -1,31 +1,21 @@
 import re
 import asyncio
 import aiohttp
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-from . import utils
-from finance_data.settings import sec_settings
+from finance_data.filings import utils
+from finance_data.filings.models import SecResults
 from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
-from finance_data.dataloader.vector_store import ChromaVectorStore, IndexKey
+from finance_data.settings import sec_settings
 
 
 def sec_data_case_dir(ticker: str, year: str) -> Path:
     """Directory for one ticker/year: ``{sec_data_dir}/{ticker}-{year}/``."""
     return Path(sec_settings.sec_data_dir) / f"{ticker}-{year}"
-
-
-@dataclass(frozen=True)
-class SecResults:
-    dashes_acc_num: str
-    form_name: str
-    filing_date: str
-    report_date: str
-    primary_document: str
 
 
 def _parse_filing_type_for_sec_query(
@@ -237,34 +227,6 @@ async def sec_main_to_markdown(
         "markdown_text": markdown_text,
     }
 
-
-async def sec_main_to_markdown_and_embed(
-    ticker: str,
-    year: str,
-    filing_type: str = "10-K",
-    force: bool = False,
-) -> dict[str, Any]:
-    """Ensure SEC filing markdown exists, then embed it into ChromaDB."""
-
-    payload = await sec_main_to_markdown(
-        ticker=ticker,
-        year=year,
-        filing_type=filing_type,
-    )
-    vector_store = ChromaVectorStore()
-    embedded_keys = vector_store.from_markdown_sec_filing(
-        ticker=ticker,
-        year=year,
-        filing_type=payload["sec_result"].form_name,
-        markdown_path=payload["markdown_path"],
-        filing_date=payload["sec_result"].filing_date,
-        force=force,
-    )
-    payload["embedded"] = [
-        {"ticker": k.ticker, "year": k.year, "filing_type": k.filing_type}
-        for k in embedded_keys
-    ]
-    return payload
 
 
 if __name__ == "__main__":

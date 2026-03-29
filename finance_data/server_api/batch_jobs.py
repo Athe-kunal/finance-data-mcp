@@ -5,7 +5,8 @@ import dataclasses
 from finance_data.earnings_transcripts.transcripts import (
     get_transcript_for_quarter_async,
 )
-from finance_data.filings.sec_data import sec_main_to_markdown_and_embed, SecResults
+from finance_data.dataloader.pipeline import sec_main_to_markdown_and_embed
+from finance_data.filings.models import SecResults
 from finance_data.server_api.models import (
     BatchEarningsTranscriptItem,
     BatchSecFilingItem,

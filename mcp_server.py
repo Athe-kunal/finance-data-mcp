@@ -13,9 +13,7 @@ from finance_data.earnings_transcripts.transcripts import (
 from finance_data.dataloader.text_splitter import Chunk
 from finance_data.dataloader.vector_store import ChromaVectorStore
 from mcp.server.transport_security import TransportSecuritySettings
-from finance_data.filings.sec_data import (
-    sec_main_to_markdown_and_embed,
-)
+from finance_data.dataloader.pipeline import sec_main_to_markdown_and_embed
 from finance_data.filings.utils import company_to_ticker
 from finance_data.settings import sec_settings
 

@@ -6,13 +6,16 @@ import asyncio
 import re
 from pathlib import Path
 
+from finance_data.filings.models import SecResults
 from finance_data.filings.sec_data import (
-    SecResults,
     get_sec_results,
     save_sec_results_as_pdfs,
+    sec_main_to_markdown,
 )
 from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from finance_data.settings import sec_settings
+
+from .vector_store import ChromaVectorStore
 
 from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
 
@@ -140,3 +143,31 @@ async def prepare_sec_filing_envs(
         envs.append(env)
 
     return envs
+
+
+async def sec_main_to_markdown_and_embed(
+    ticker: str,
+    year: str,
+    filing_type: str = "10-K",
+    force: bool = False,
+) -> dict:
+    """Ensure SEC filing markdown exists, then embed it into ChromaDB."""
+    payload = await sec_main_to_markdown(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+    )
+    vector_store = ChromaVectorStore()
+    embedded_keys = vector_store.from_markdown_sec_filing(
+        ticker=ticker,
+        year=year,
+        filing_type=payload["sec_result"].form_name,
+        markdown_path=payload["markdown_path"],
+        filing_date=payload["sec_result"].filing_date,
+        force=force,
+    )
+    payload["embedded"] = [
+        {"ticker": k.ticker, "year": k.year, "filing_type": k.filing_type}
+        for k in embedded_keys
+    ]
+    return payload

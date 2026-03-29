@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import functools
 
-from finance_data.filings.sec_data import SecResults
+from finance_data.filings.models import SecResults
 
 
 @dataclass
