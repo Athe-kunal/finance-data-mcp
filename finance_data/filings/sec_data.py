@@ -8,7 +8,7 @@ from typing import Any
 from loguru import logger
 
 from finance_data.filings import utils
-from finance_data.filings.models import SecResults
+from finance_data.filings.models import SecFilingType, SecResults
 from finance_data.ocr.olmocr_pipeline import get_markdown_path, run_olmo_ocr
 from finance_data.settings import sec_settings
 
@@ -46,7 +46,7 @@ def _parse_filing_type_for_sec_query(
 async def get_sec_results(
     ticker: str,
     year: str,
-    filing_type: str = "10-K",
+    filing_type: SecFilingType | str = SecFilingType.FORM_10_K,
     company: str | None = None,
     email: str | None = None,
 ) -> list[SecResults]:
@@ -77,8 +77,7 @@ async def get_sec_results(
                 )
             json_data = await response.json()
 
-    filings = json_data["filings"]
-    recent_filings = filings["recent"]
+    recent_filings = json_data["filings"]["recent"]
     sec_form_names: list[str] = []
     form_lists: list[SecResults] = []
 
@@ -160,7 +159,7 @@ async def save_sec_results_as_pdfs(
 async def sec_main(
     ticker: str,
     year: str,
-    filing_type: str = "10-K",
+    filing_type: SecFilingType | str = SecFilingType.FORM_10_K,
 ) -> tuple[SecResults, Path]:
     """Fetch one SEC filing result and ensure its PDF exists.
 
@@ -174,6 +173,8 @@ async def sec_main(
         year=year,
         filing_type=filing_type,
     )
+    for scr in sec_results:
+        logger.info(f"{scr.form_name=} | {scr.filing_date=}")
     if not sec_results:
         raise FileNotFoundError(
             f"No SEC filing found for ticker={ticker}, year={year}, filing_type={filing_type}."
@@ -202,7 +203,7 @@ def sec_markdown_path_for_pdf(pdf_path: str | Path) -> Path:
 async def sec_main_to_markdown(
     ticker: str,
     year: str,
-    filing_type: str = "10-K",
+    filing_type: SecFilingType | str = SecFilingType.FORM_10_K,
 ) -> dict[str, Any]:
     """Ensure one SEC filing is downloaded and OCR markdown exists, then return markdown."""
 
@@ -226,7 +227,6 @@ async def sec_main_to_markdown(
         "markdown_path": markdown_path,
         "markdown_text": markdown_text,
     }
-
 
 
 if __name__ == "__main__":

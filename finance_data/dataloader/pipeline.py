@@ -6,7 +6,7 @@ import asyncio
 import re
 from pathlib import Path
 
-from finance_data.filings.models import SecResults
+from finance_data.filings.models import SecFilingType, SecResults
 from finance_data.filings.sec_data import (
     get_sec_results,
     save_sec_results_as_pdfs,
@@ -20,7 +20,7 @@ from .vector_store import ChromaVectorStore
 from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
 
 
-def _matches_filing_type(sec_result: SecResults, filing_type: str) -> bool:
+def _matches_filing_type(sec_result: SecResults, filing_type: SecFilingType | str) -> bool:
     """Return True if sec_result matches the requested filing type."""
     ft = filing_type.strip().upper().replace(" ", "")
     if ft == "10-K":
@@ -39,7 +39,7 @@ def _matches_filing_type(sec_result: SecResults, filing_type: str) -> bool:
 async def ensure_sec_data(
     ticker: str,
     year: str,
-    filing_type: str,
+    filing_type: SecFilingType | str,
 ) -> tuple[list[SecResults], list[Path]]:
     """
     Ensure SEC filing PDFs exist locally. Download only missing files.
@@ -93,7 +93,7 @@ async def ensure_sec_data(
 async def prepare_sec_filing_envs(
     ticker: str,
     year: str,
-    filing_type: str,
+    filing_type: SecFilingType | str,
     workspace: str | Path | None = None,
 ) -> list[MarkdownReplEnvironment]:
     """
@@ -148,7 +148,7 @@ async def prepare_sec_filing_envs(
 async def sec_main_to_markdown_and_embed(
     ticker: str,
     year: str,
-    filing_type: str = "10-K",
+    filing_type: SecFilingType | str = SecFilingType.FORM_10_K,
     force: bool = False,
 ) -> dict:
     """Ensure SEC filing markdown exists, then embed it into ChromaDB."""

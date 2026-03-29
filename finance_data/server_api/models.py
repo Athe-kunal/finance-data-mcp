@@ -3,6 +3,7 @@
 from pydantic import BaseModel, field_validator
 
 from finance_data.earnings_transcripts.transcripts import quarter_label_to_num
+from finance_data.filings.models import SecFilingType
 
 
 class CompanyNameRequest(BaseModel):
@@ -16,7 +17,7 @@ class SecMainRequest(BaseModel):
 
     ticker: str
     year: str
-    filing_type: str = "10-K"
+    filing_type: SecFilingType | str = SecFilingType.FORM_10_K
 
 
 class EarningsTranscriptQuarterRequest(BaseModel):
@@ -37,7 +38,7 @@ class SecMainToMarkdownRequest(BaseModel):
 
     ticker: str
     year: str
-    filing_type: str = "10-K"
+    filing_type: SecFilingType | str = SecFilingType.FORM_10_K
 
 
 class SecMainToMarkdownEmbedRequest(BaseModel):
@@ -45,7 +46,7 @@ class SecMainToMarkdownEmbedRequest(BaseModel):
 
     ticker: str
     year: str
-    filing_type: str = "10-K"
+    filing_type: SecFilingType | str = SecFilingType.FORM_10_K
     force: bool = False
 
 
@@ -163,7 +164,7 @@ class SecFilingsSearchRequest(BaseModel):
 
     ticker: str
     year: str
-    filing_type: str
+    filing_type: SecFilingType | str
     query: str
     top_k: int = 5
 
@@ -177,4 +178,4 @@ class ChunkResult(BaseModel):
     section_title: str | None
     chunk_index: int
     score: float
-    filing_type: str | None = None
+    filing_type: SecFilingType | str | None = None

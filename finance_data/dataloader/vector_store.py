@@ -15,6 +15,7 @@ from openai import OpenAI
 
 from finance_data.dataloader.text_splitter import Chunk, chunk_markdown
 from finance_data.earnings_transcripts.transcripts import Transcript
+from finance_data.filings.models import SecFilingType
 from finance_data.settings import sec_settings
 
 _log = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ _CHROMA_MISSING_PAGE_NUM = -1
 class IndexKey(NamedTuple):
     ticker: str
     year: str
-    filing_type: str
+    filing_type: SecFilingType | str
 
 
 @dataclass
@@ -177,7 +178,7 @@ class ChromaVectorStore:
         *,
         ticker: str,
         year: str,
-        filing_type: str,
+        filing_type: SecFilingType | str,
         filing_date: str | None,
         source_path: str,
         chunks: list[Chunk],
@@ -286,7 +287,7 @@ class ChromaVectorStore:
         self,
         ticker: str,
         year: str,
-        filing_type: str,
+        filing_type: SecFilingType | str,
         markdown_path: str | Path,
         filing_date: str | None = None,
         force: bool = False,
@@ -411,7 +412,7 @@ class ChromaVectorStore:
         self,
         ticker: str,
         year: str,
-        filing_type: str,
+        filing_type: SecFilingType | str,
         query: str,
         top_k: int = 5,
     ) -> list[tuple[Chunk, float]]:

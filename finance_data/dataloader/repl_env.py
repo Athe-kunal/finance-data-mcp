@@ -4,14 +4,14 @@ from dataclasses import dataclass
 from pathlib import Path
 import functools
 
-from finance_data.filings.models import SecResults
+from finance_data.filings.models import SecFilingType, SecResults
 
 
 @dataclass
 class MarkdownReplEnvironment:
     ticker: str
     year: str
-    filing_type: str
+    filing_type: SecFilingType | str
     markdown_path: Path
     markdown_text: str
     namespace: dict[str, object]
