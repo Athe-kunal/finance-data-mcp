@@ -1,5 +1,25 @@
 # SEC-filings-Markdown
 
+## Documentation
+
+Detailed operational docs are available in `docs/`:
+
+- `docs/README.md`
+- `docs/setup-and-operations.md`
+
+## Core library functions
+
+These functions are good entry points when using the package directly:
+
+| Function | Location | What it does |
+|---|---|---|
+| `sec_main(ticker, year, filing_type)` | `finance_data/filings/sec_data.py` | Fetches SEC filing metadata, downloads the filing PDF, and returns `(SecResults, pdf_path)`. |
+| `sec_main_to_markdown(ticker, year, filing_type)` | `finance_data/filings/sec_data.py` | Ensures the filing PDF exists, runs olmOCR when needed, and returns markdown text + file paths. |
+| `prepare_sec_filing_envs(ticker, year, filing_type)` | `finance_data/dataloader/pipeline.py` | Ensures PDFs exist, runs OCR, and builds REPL-friendly markdown environments for each filing. |
+| `sec_main_to_markdown_and_embed(ticker, year, filing_type, force)` | `finance_data/dataloader/pipeline.py` | Runs SEC fetch/OCR flow and stores vectors in ChromaDB for semantic search. |
+| `get_transcript_for_quarter_async(ticker, year, quarter_num)` | `finance_data/earnings_transcripts/transcripts.py` | Fetches a quarter earnings transcript asynchronously and returns parsed transcript data. |
+| `save_transcript_markdown(transcript)` | `finance_data/earnings_transcripts/transcripts.py` | Persists one transcript into a standardized markdown file path under `EARNINGS_TRANSCRIPTS_DIR`. |
+
 ## Configuration
 
 Settings are loaded via Pydantic Settings from environment variables or a `.env` file:

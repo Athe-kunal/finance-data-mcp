@@ -4,7 +4,7 @@ This folder contains practical guides for running this repository.
 
 ## Guides
 
-- `setup-and-operations.md`: Installation, Docker setup, server startup, and ngrok usage.
+- `setup-and-operations.md`: Installation, Docker setup, Makefile argument explanation, server startup, ngrok usage, and command reference.
 
 ## Minimum hardware
 
