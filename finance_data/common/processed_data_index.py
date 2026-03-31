@@ -7,11 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import threading
-
+from loguru import logger
 from finance_data.settings import sec_settings
 
 _SEC_CASE_DIR_RE = re.compile(r"^(?P<ticker>.+)-(?P<year>\d{4})$")
-_TRANSCRIPT_FILENAME_RE = re.compile(r"^Q(?P<quarter>[1-4])(?:_.+)?\.md$", re.IGNORECASE)
+_TRANSCRIPT_FILENAME_RE = re.compile(
+    r"^Q(?P<quarter>[1-4])(?:_.+)?\.md$", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,9 @@ class ProcessedDataIndex:
                 or key in self._snapshot.sec_markdown_filings
             )
         if in_snapshot and self._sec_filing_exists_on_disk(*key):
+            logger.info(
+                f"Processed-data cache hit for SEC filing ticker={key[0]} year={key[1]} filing_type={key[2]}.",
+            )
             return True
         if self._sec_filing_exists_on_disk(*key):
             self.mark_sec_filing(*key)
@@ -113,6 +118,9 @@ class ProcessedDataIndex:
         with self._lock:
             in_snapshot = key in self._snapshot.transcript_quarters
         if in_snapshot and self._transcript_exists_on_disk(*key):
+            logger.info(
+                f"Processed-data cache hit for transcript ticker={key[0]} year={key[1]} quarter={key[2]}.",
+            )
             return True
         if self._transcript_exists_on_disk(*key):
             self.mark_transcript(*key)
@@ -163,9 +171,7 @@ class ProcessedDataIndex:
                     results.add(parsed)
         return results
 
-    def _parse_sec_filing_path(
-        self, pdf_path: Path
-    ) -> tuple[str, str, str] | None:
+    def _parse_sec_filing_path(self, pdf_path: Path) -> tuple[str, str, str] | None:
         case_match = _SEC_CASE_DIR_RE.match(pdf_path.parent.name)
         if case_match is None:
             return None
@@ -242,7 +248,9 @@ class ProcessedDataIndex:
         return any(root.glob(pattern))
 
 
-def _normalized_sec_key(ticker: str, year: str, filing_type: str) -> tuple[str, str, str]:
+def _normalized_sec_key(
+    ticker: str, year: str, filing_type: str
+) -> tuple[str, str, str]:
     return ticker.upper().strip(), str(year).strip(), filing_type.upper().strip()
 
 
