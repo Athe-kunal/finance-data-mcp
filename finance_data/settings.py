@@ -26,6 +26,7 @@ class SECSettings(BaseSettings):
     # ChromaDB vector persistence
     chroma_persist_dir: str = "./chroma_db"
     chroma_collection_name: str = "sec_filings"
+    chroma_bm25_collection_name: str = "sec_filings_bm25"
 
     # Main FastAPI app (uvicorn server:app); Makefile uses API_PORT for the same default.
     api_host: str = "127.0.0.1"

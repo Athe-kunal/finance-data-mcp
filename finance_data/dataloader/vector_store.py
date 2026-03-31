@@ -54,7 +54,7 @@ def embed_chunks(chunks: list[Chunk], client: OpenAI, model: str) -> np.ndarray:
 
 
 class ChromaVectorStore:
-    """Single-collection vector store backed by ChromaDB + vLLM embeddings."""
+    """Chroma-backed store with semantic and BM25 collections."""
 
     def __init__(
         self,
@@ -65,6 +65,7 @@ class ChromaVectorStore:
     ) -> None:
         self._persist_dir = Path(persist_dir or sec_settings.chroma_persist_dir)
         self._collection_name = collection_name or sec_settings.chroma_collection_name
+        self._bm25_collection_name = sec_settings.chroma_bm25_collection_name
         self._embedding_server = embedding_server or sec_settings.embedding_server
         self._embedding_model = embedding_model or sec_settings.embedding_model
 
@@ -72,6 +73,22 @@ class ChromaVectorStore:
         self._collection: Collection = self._client.get_or_create_collection(
             name=self._collection_name,
             metadata={"hnsw:space": "cosine"},
+        )
+        self._bm25_collection: Collection = self._create_bm25_collection()
+
+    def _create_bm25_collection(self) -> Collection:
+        try:
+            from chromadb.utils.embedding_functions import ChromaBm25EmbeddingFunction
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "BM25 dependencies are not installed. Install with "
+                "`uv sync --group ocr-md`."
+            ) from exc
+
+        bm25_embedding = ChromaBm25EmbeddingFunction()
+        return self._client.get_or_create_collection(
+            name=self._bm25_collection_name,
+            embedding_function=bm25_embedding,
         )
 
     def _make_client(self) -> OpenAI:
@@ -193,9 +210,12 @@ class ChromaVectorStore:
             ]
         }
 
-        existing = self._collection.get(where=where, include=[])
-        existing_ids = existing.get("ids", [])
-        if existing_ids and not force:
+        dense_existing = self._collection.get(where=where, include=[])
+        dense_ids = dense_existing.get("ids", [])
+        bm25_existing = self._bm25_collection.get(where=where, include=[])
+        bm25_ids = bm25_existing.get("ids", [])
+
+        if dense_ids and bm25_ids and not force:
             _log.info(
                 "Documents already exist for %s/%s/%s, skipping (force=False).",
                 ticker,
@@ -203,8 +223,10 @@ class ChromaVectorStore:
                 filing_type,
             )
             return
-        if existing_ids:
-            self._collection.delete(ids=existing_ids)
+        if dense_ids:
+            self._collection.delete(ids=dense_ids)
+        if bm25_ids:
+            self._bm25_collection.delete(ids=bm25_ids)
 
         ids: list[str] = []
         metadatas: list[Metadata] = []
@@ -235,6 +257,11 @@ class ChromaVectorStore:
         self._collection.add(
             ids=ids,
             embeddings=embeddings.tolist(),
+            documents=documents,
+            metadatas=metadatas,
+        )
+        self._bm25_collection.add(
+            ids=ids,
             documents=documents,
             metadatas=metadatas,
         )
@@ -378,7 +405,7 @@ class ChromaVectorStore:
                 keys.add(IndexKey(ticker=t, year=y, filing_type=f))
         return sorted(keys)
 
-    def search(
+    def semantic_search(
         self,
         ticker: str,
         year: str,
@@ -415,6 +442,59 @@ class ChromaVectorStore:
         if not metadatas:
             raise FileNotFoundError(
                 f"No vectors found for ticker={ticker}, year={year}, filing_type={filing_type}."
+            )
+
+        hits: list[tuple[Chunk, float]] = []
+        for metadata, distance in zip(metadatas, distances):
+            chunk = self._parse_chunk_metadata(metadata)
+            score = 1.0 - float(distance)
+            hits.append((chunk, score))
+        return hits
+
+    def search(
+        self,
+        ticker: str,
+        year: str,
+        filing_type: SecFilingType | str,
+        query: str,
+        top_k: int = 5,
+    ) -> list[tuple[Chunk, float]]:
+        """Backward-compatible alias for semantic search."""
+        return self.semantic_search(
+            ticker=ticker,
+            year=year,
+            filing_type=filing_type,
+            query=query,
+            top_k=top_k,
+        )
+
+    def search_bm25(
+        self,
+        ticker: str,
+        year: str,
+        filing_type: SecFilingType | str,
+        query: str,
+        top_k: int = 5,
+    ) -> list[tuple[Chunk, float]]:
+        where = {
+            "$and": [
+                {"ticker": ticker},
+                {"year": str(year)},
+                {"filing_type": filing_type},
+            ]
+        }
+        result = self._bm25_collection.query(
+            query_texts=[query],
+            where=where,
+            n_results=top_k,
+            include=["metadatas", "distances"],
+        )
+        metadatas = result.get("metadatas", [[]])[0]
+        distances = result.get("distances", [[]])[0]
+        if not metadatas:
+            raise FileNotFoundError(
+                "No BM25 chunks found for "
+                f"ticker={ticker}, year={year}, filing_type={filing_type}."
             )
 
         hits: list[tuple[Chunk, float]] = []

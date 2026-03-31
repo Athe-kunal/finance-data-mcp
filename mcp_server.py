@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from mcp.server.fastmcp import FastMCP
 
@@ -50,6 +50,72 @@ def _get_vector_index() -> ChromaVectorStore:
     if _vector_index is None:
         _vector_index = ChromaVectorStore()
     return _vector_index
+
+
+def _semantic_search(
+    vector_index: ChromaVectorStore,
+    *,
+    ticker: str,
+    year: str,
+    filing_type: str,
+    query: str,
+    top_k: int,
+) -> list[tuple[Chunk, float]]:
+    return vector_index.semantic_search(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+        query=query,
+        top_k=top_k,
+    )
+
+
+def _search_bm25(
+    vector_index: ChromaVectorStore,
+    *,
+    ticker: str,
+    year: str,
+    filing_type: str,
+    query: str,
+    top_k: int,
+) -> list[tuple[Chunk, float]]:
+    return vector_index.search_bm25(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+        query=query,
+        top_k=top_k,
+    )
+
+
+def _search_transcripts_common(
+    vector_index: ChromaVectorStore,
+    *,
+    ticker: str,
+    year: str,
+    query: str,
+    top_k: int,
+    search_fn: Callable[..., list[tuple[Chunk, float]]],
+) -> list[tuple[Chunk, float, str]]:
+    resolved = vector_index.resolve_transcript_quarters(ticker, year)
+    if not resolved:
+        raise FileNotFoundError("No transcript indexes (Q1–Q4) for this ticker/year.")
+
+    ticker_key, quarters = resolved
+    merged: list[tuple[Chunk, float, str]] = []
+    for filing_type in quarters:
+        hits = search_fn(
+            vector_index=vector_index,
+            ticker=ticker_key,
+            year=year,
+            filing_type=filing_type,
+            query=query,
+            top_k=top_k,
+        )
+        for chunk, score in hits:
+            merged.append((chunk, score, filing_type))
+    merged.sort(key=lambda item: -item[1])
+    return merged[:top_k]
 
 
 def _sec_pdf_root() -> Path:
@@ -303,7 +369,8 @@ def search_sec_filings_tool(
         query: Natural-language search query.
         top_k: Maximum number of chunks to return.
     """
-    results = _get_vector_index().search(
+    results = _semantic_search(
+        _get_vector_index(),
         ticker=ticker,
         year=year,
         filing_type=filing_type,
@@ -314,7 +381,32 @@ def search_sec_filings_tool(
 
 
 @mcp.tool()
-def search_transcripts_tool(ticker: str, year: str, query: str, top_k: int = 5) -> str:
+def search_sec_filings_bm25_tool(
+    ticker: str,
+    year: str,
+    filing_type: str,
+    query: str,
+    top_k: int = 5,
+) -> str:
+    """Run BM25 search over one indexed SEC filing."""
+    results = _search_bm25(
+        _get_vector_index(),
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+        query=query,
+        top_k=top_k,
+    )
+    return "\n\n".join([chunk.text for chunk, _ in results])
+
+
+@mcp.tool()
+def search_transcripts_tool(
+    ticker: str,
+    year: str,
+    query: str,
+    top_k: int = 5,
+) -> str:
     """Run semantic search across all indexed transcript quarters.
 
     **Prerequisite — transcripts must be indexed before searching:**
@@ -333,26 +425,35 @@ def search_transcripts_tool(ticker: str, year: str, query: str, top_k: int = 5) 
     """
     year_s = str(year).strip()
     vector_index = _get_vector_index()
-    resolved = vector_index.resolve_transcript_quarters(ticker, year_s)
+    merged = _search_transcripts_common(
+        vector_index,
+        ticker=ticker,
+        year=year_s,
+        query=query,
+        top_k=top_k,
+        search_fn=_semantic_search,
+    )
+    return "\n\n".join([chunk.text for chunk, _, _ in merged])
 
-    if not resolved:
-        raise FileNotFoundError("No transcript indexes (Q1–Q4) for this ticker/year.")
 
-    ticker_key, quarters = resolved
-    merged: list[tuple[Chunk, float, str]] = []
-    for filing_type in quarters:
-        hits = vector_index.search(
-            ticker=ticker_key,
-            year=year_s,
-            filing_type=filing_type,
-            query=query,
-            top_k=top_k,
-        )
-        for chunk, score in hits:
-            merged.append((chunk, score, filing_type))
-
-    merged.sort(key=lambda item: -item[1])
-    merged = merged[:top_k]
+@mcp.tool()
+def search_transcripts_bm25_tool(
+    ticker: str,
+    year: str,
+    query: str,
+    top_k: int = 5,
+) -> str:
+    """Run BM25 search across all indexed transcript quarters."""
+    year_s = str(year).strip()
+    vector_index = _get_vector_index()
+    merged = _search_transcripts_common(
+        vector_index,
+        ticker=ticker,
+        year=year_s,
+        query=query,
+        top_k=top_k,
+        search_fn=_search_bm25,
+    )
     return "\n\n".join([chunk.text for chunk, _, _ in merged])
 
 

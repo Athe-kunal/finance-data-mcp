@@ -2,7 +2,7 @@ import dataclasses
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
 
@@ -79,6 +79,79 @@ def _load_run_olmo_ocr() -> Any:
             ),
         ) from exc
     return run_olmo_ocr
+
+
+def _search_chunks(
+    index: Any,
+    *,
+    ticker: str,
+    year: str,
+    filing_type: str,
+    query: str,
+    top_k: int,
+) -> list[tuple[Any, float]]:
+    return index.semantic_search(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+        query=query,
+        top_k=top_k,
+    )
+
+
+def _search_chunks_bm25(
+    index: Any,
+    *,
+    ticker: str,
+    year: str,
+    filing_type: str,
+    query: str,
+    top_k: int,
+) -> list[tuple[Any, float]]:
+    return index.search_bm25(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+        query=query,
+        top_k=top_k,
+    )
+
+
+def _search_transcript_chunks(
+    index: Any,
+    *,
+    ticker: str,
+    year: str,
+    query: str,
+    top_k: int,
+    search_fn: Callable[..., list[tuple[Any, float]]],
+) -> list[tuple[Any, float, str]]:
+    resolved = index.resolve_transcript_quarters(ticker, year)
+    if not resolved:
+        raise HTTPException(
+            status_code=404,
+            detail="No transcript indexes (Q1–Q4) for this ticker/year.",
+        )
+
+    ticker_key, quarters = resolved
+    merged: list[tuple[Any, float, str]] = []
+    for filing_type in quarters:
+        try:
+            hits = search_fn(
+                index=index,
+                ticker=ticker_key,
+                year=year,
+                filing_type=filing_type,
+                query=query,
+                top_k=top_k,
+            )
+        except FileNotFoundError:
+            continue
+        for chunk, score in hits:
+            merged.append((chunk, score, filing_type))
+
+    merged.sort(key=lambda item: -item[1])
+    return merged[:top_k]
 
 
 @asynccontextmanager
@@ -319,11 +392,41 @@ def search_sec_filings(request: SecFilingsSearchRequest):
     Build the index first via ``/vector_store/embed_sec_filings`` after
     ``/sec_main`` + ``/run_olmo_ocr``.
 
-    Returns the top-k chunks by cosine similarity to the query embedding.
+    Returns the top-k chunks by cosine similarity.
     """
     index = _require_vector_index()
     try:
-        results = index.search(
+        results = _search_chunks(
+            index,
+            ticker=request.ticker,
+            year=request.year,
+            filing_type=request.filing_type,
+            query=request.query,
+            top_k=request.top_k,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return [
+        ChunkResult(
+            text=chunk.text,
+            chunk_type=chunk.chunk_type,
+            page_num=chunk.page_num,
+            section_title=chunk.section_title,
+            chunk_index=chunk.index,
+            score=score,
+        )
+        for chunk, score in results
+    ]
+
+
+@app.post("/vector_store/search_sec_filings_bm25", response_model=list[ChunkResult])
+def search_sec_filings_bm25(request: SecFilingsSearchRequest):
+    """BM25 search over one SEC filing (10-K, 10-Q, …) in Chroma."""
+    index = _require_vector_index()
+    try:
+        results = _search_chunks_bm25(
+            index,
             ticker=request.ticker,
             year=request.year,
             filing_type=request.filing_type,
@@ -350,29 +453,42 @@ def search_sec_filings(request: SecFilingsSearchRequest):
 def search_transcripts(request: TranscriptSearchRequest):
     index = _require_vector_index()
     year_s = str(request.year).strip()
-    resolved = index.resolve_transcript_quarters(request.ticker, year_s)
-    if not resolved:
-        raise HTTPException(
-            status_code=404,
-            detail="No transcript indexes (Q1–Q4) for this ticker/year.",
+    merged = _search_transcript_chunks(
+        index,
+        ticker=request.ticker,
+        year=year_s,
+        query=request.query,
+        top_k=request.top_k,
+        search_fn=_search_chunks,
+    )
+    if not merged:
+        raise HTTPException(status_code=404, detail="No transcript search hits.")
+    return [
+        ChunkResult(
+            text=chunk.text,
+            chunk_type=chunk.chunk_type,
+            page_num=chunk.page_num,
+            section_title=chunk.section_title,
+            chunk_index=chunk.index,
+            score=score,
+            filing_type=ft,
         )
-    ticker_key, quarters = resolved
-    merged: list[tuple[Any, float, str]] = []
-    for ft in quarters:
-        try:
-            hits = index.search(
-                ticker=ticker_key,
-                year=year_s,
-                filing_type=ft,
-                query=request.query,
-                top_k=request.top_k,
-            )
-        except FileNotFoundError:
-            continue
-        for chunk, score in hits:
-            merged.append((chunk, score, ft))
-    merged.sort(key=lambda item: -item[1])
-    merged = merged[: request.top_k]
+        for chunk, score, ft in merged
+    ]
+
+
+@app.post("/vector_store/search_transcripts_bm25", response_model=list[ChunkResult])
+def search_transcripts_bm25(request: TranscriptSearchRequest):
+    index = _require_vector_index()
+    year_s = str(request.year).strip()
+    merged = _search_transcript_chunks(
+        index,
+        ticker=request.ticker,
+        year=year_s,
+        query=request.query,
+        top_k=request.top_k,
+        search_fn=_search_chunks_bm25,
+    )
     if not merged:
         raise HTTPException(status_code=404, detail="No transcript search hits.")
     return [

@@ -26,6 +26,7 @@ ocr-md = [
     "guidellm[recommended]>=0.5.4",
     "nvitop>=1.6.2",
     "chromadb>=1.0.20",
+    "snowballstemmer>=2.2.0",
     "openai>=1.0",
     "langchain-text-splitters>=0.3.0",
     "markdownify>=0.13.1",

@@ -16,7 +16,7 @@ These functions are good entry points when using the package directly:
 | `sec_main(ticker, year, filing_type)` | `finance_data/filings/sec_data.py` | Fetches SEC filing metadata, downloads the filing PDF, and returns `(SecResults, pdf_path)`. |
 | `sec_main_to_markdown(ticker, year, filing_type)` | `finance_data/filings/sec_data.py` | Ensures the filing PDF exists, runs olmOCR when needed, and returns markdown text + file paths. |
 | `prepare_sec_filing_envs(ticker, year, filing_type)` | `finance_data/dataloader/pipeline.py` | Ensures PDFs exist, runs OCR, and builds REPL-friendly markdown environments for each filing. |
-| `sec_main_to_markdown_and_embed(ticker, year, filing_type, force)` | `finance_data/dataloader/pipeline.py` | Runs SEC fetch/OCR flow and stores vectors in ChromaDB for semantic search. |
+| `sec_main_to_markdown_and_embed(ticker, year, filing_type, force)` | `finance_data/dataloader/pipeline.py` | Runs SEC fetch/OCR flow and stores chunks in ChromaDB for semantic and BM25 search. |
 | `get_transcript_for_quarter_async(ticker, year, quarter_num)` | `finance_data/earnings_transcripts/transcripts.py` | Fetches a quarter earnings transcript asynchronously and returns parsed transcript data. |
 | `save_transcript_markdown(transcript)` | `finance_data/earnings_transcripts/transcripts.py` | Persists one transcript into a standardized markdown file path under `EARNINGS_TRANSCRIPTS_DIR`. |
 
@@ -42,7 +42,7 @@ Settings are loaded via Pydantic Settings from environment variables or a `.env`
 
 ## MCP server
 
-`mcp_server.py` exposes SEC filing and earnings-transcript workflows over MCP (fetch/OCR, embed, semantic search) using the same backends as the REST API: **olmOCR** and an **OpenAI-compatible embedding** endpoint backed by vLLM.
+`mcp_server.py` exposes SEC filing and earnings-transcript workflows over MCP (fetch/OCR, embed, semantic search, BM25 search) using the same backends as the REST API: **olmOCR** and an **OpenAI-compatible embedding** endpoint backed by vLLM.
 
 ### 1. Start the vLLM backends
 
@@ -105,7 +105,8 @@ Use your client’s documented configuration for **Streamable HTTP** / URL-based
 
 - `company_name_to_ticker_tool`, `list_resources_tool`
 - `sec_main_to_markdown_and_embed_tool`, `earnings_transcript_for_quarter_tool`
-- `search_sec_filings_tool`, `search_transcripts_tool`
+- `search_sec_filings_tool`, `search_sec_filings_bm25_tool`
+- `search_transcripts_tool`, `search_transcripts_bm25_tool`
 
 For an interactive walkthrough of how to use the MCP, [open this ChatGPT chats](https://chatgpt.com/share/69c0bf65-54a8-8010-bd40-6aa33908a1e6).
 
@@ -289,10 +290,13 @@ Use `"force": true` to replace existing vectors for those quarters. Filing types
 
 ### 4. Search across indexed quarters
 
-Search merges hits from all transcript quarters present for that ticker/year:
+Search merges hits from all transcript quarters present for that ticker/year.
+Use `/vector_store/search_transcripts` for semantic search and
+`/vector_store/search_transcripts_bm25` for BM25 lexical ranking (Chroma BM25
+with snowballstemmer tokenization):
 
 ```bash
-curl -s -X POST "http://127.0.0.1:8081/vector_store/search_transcripts" \
+curl -s -X POST "http://127.0.0.1:8081/vector_store/search_transcripts_bm25" \
   -H "Content-Type: application/json" \
   -d '{"ticker":"AMZN","year":"2025","query":"AWS revenue growth","top_k":5}'
 ```
