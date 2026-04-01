@@ -52,7 +52,7 @@ def _get_vector_index() -> ChromaVectorStore:
     return _vector_index
 
 
-def _semantic_search(
+def _hybrid_search(
     vector_index: ChromaVectorStore,
     *,
     ticker: str,
@@ -61,25 +61,7 @@ def _semantic_search(
     query: str,
     top_k: int,
 ) -> list[tuple[Chunk, float]]:
-    return vector_index.semantic_search(
-        ticker=ticker,
-        year=year,
-        filing_type=filing_type,
-        query=query,
-        top_k=top_k,
-    )
-
-
-def _search_bm25(
-    vector_index: ChromaVectorStore,
-    *,
-    ticker: str,
-    year: str,
-    filing_type: str,
-    query: str,
-    top_k: int,
-) -> list[tuple[Chunk, float]]:
-    return vector_index.search_bm25(
+    return vector_index.hybrid_search(
         ticker=ticker,
         year=year,
         filing_type=filing_type,
@@ -367,7 +349,7 @@ def search_sec_filings_tool(
     query: str,
     top_k: int = 5,
 ) -> str:
-    """Run semantic search over one indexed SEC filing.
+    """Run hybrid search over one indexed SEC filing.
 
     **Prerequisite — data must be indexed before searching:**
     Before calling this tool, verify the filing has been downloaded, OCR-ed, and
@@ -383,27 +365,7 @@ def search_sec_filings_tool(
         query: Natural-language search query.
         top_k: Maximum number of chunks to return.
     """
-    results = _semantic_search(
-        _get_vector_index(),
-        ticker=ticker,
-        year=year,
-        filing_type=filing_type,
-        query=query,
-        top_k=top_k,
-    )
-    return "\n\n".join([chunk.text for chunk, _ in results])
-
-
-@mcp.tool()
-def search_sec_filings_bm25_tool(
-    ticker: str,
-    year: str,
-    filing_type: str,
-    query: str,
-    top_k: int = 5,
-) -> str:
-    """Run BM25 search over one indexed SEC filing."""
-    results = _search_bm25(
+    results = _hybrid_search(
         _get_vector_index(),
         ticker=ticker,
         year=year,
@@ -422,7 +384,7 @@ def search_transcripts_tool(
     top_k: int = 5,
     quarter: Literal["Q1", "Q2", "Q3", "Q4"] | None = None,
 ) -> str:
-    """Run semantic search over indexed transcript chunks.
+    """Run hybrid search over indexed transcript chunks.
 
     **Prerequisite — transcripts must be indexed before searching:**
     Before calling this tool, verify that at least one quarterly transcript for the
@@ -449,35 +411,7 @@ def search_transcripts_tool(
         query=query,
         top_k=top_k,
         quarter=quarter,
-        search_fn=_semantic_search,
-    )
-    return "\n\n".join([chunk.text for chunk, _, _ in merged])
-
-
-@mcp.tool()
-def search_transcripts_bm25_tool(
-    ticker: str,
-    year: str,
-    query: str,
-    top_k: int = 5,
-    quarter: Literal["Q1", "Q2", "Q3", "Q4"] | None = None,
-) -> str:
-    """Run BM25 search over indexed transcript chunks.
-
-    Args:
-        quarter: If set, search only that quarter (``Q1``–``Q4``). If omitted, merge
-            across all indexed quarters for the year.
-    """
-    year_s = str(year).strip()
-    vector_index = _get_vector_index()
-    merged = _search_transcripts_common(
-        vector_index,
-        ticker=ticker,
-        year=year_s,
-        query=query,
-        top_k=top_k,
-        quarter=quarter,
-        search_fn=_search_bm25,
+        search_fn=_hybrid_search,
     )
     return "\n\n".join([chunk.text for chunk, _, _ in merged])
 

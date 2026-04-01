@@ -94,25 +94,7 @@ def _search_chunks(
     query: str,
     top_k: int,
 ) -> list[tuple[Any, float]]:
-    return index.semantic_search(
-        ticker=ticker,
-        year=year,
-        filing_type=filing_type,
-        query=query,
-        top_k=top_k,
-    )
-
-
-def _search_chunks_bm25(
-    index: Any,
-    *,
-    ticker: str,
-    year: str,
-    filing_type: str,
-    query: str,
-    top_k: int,
-) -> list[tuple[Any, float]]:
-    return index.search_bm25(
+    return index.hybrid_search(
         ticker=ticker,
         year=year,
         filing_type=filing_type,
@@ -423,45 +405,16 @@ def list_sec_filings(request: SecFilingsListRequest):
 
 @app.post("/vector_store/search_sec_filings", response_model=list[ChunkResult])
 def search_sec_filings(request: SecFilingsSearchRequest):
-    """Semantic search over one SEC filing (10-K, 10-Q, …) in Chroma.
+    """Hybrid search over one SEC filing (10-K, 10-Q, …) in Chroma.
 
     Build the index first via ``/vector_store/embed_sec_filings`` after
     ``/sec_main`` + ``/run_olmo_ocr``.
 
-    Returns the top-k chunks by cosine similarity.
+    Returns the top-k chunks after dense + BM25 fusion and reranking.
     """
     index = _require_vector_index()
     try:
         results = _search_chunks(
-            index,
-            ticker=request.ticker,
-            year=request.year,
-            filing_type=request.filing_type,
-            query=request.query,
-            top_k=request.top_k,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    return [
-        ChunkResult(
-            text=chunk.text,
-            chunk_type=chunk.chunk_type,
-            page_num=chunk.page_num,
-            section_title=chunk.section_title,
-            chunk_index=chunk.index,
-            score=score,
-        )
-        for chunk, score in results
-    ]
-
-
-@app.post("/vector_store/search_sec_filings_bm25", response_model=list[ChunkResult])
-def search_sec_filings_bm25(request: SecFilingsSearchRequest):
-    """BM25 search over one SEC filing (10-K, 10-Q, …) in Chroma."""
-    index = _require_vector_index()
-    try:
-        results = _search_chunks_bm25(
             index,
             ticker=request.ticker,
             year=request.year,
@@ -497,35 +450,6 @@ def search_transcripts(request: TranscriptSearchRequest):
         top_k=request.top_k,
         quarter=request.quarter,
         search_fn=_search_chunks,
-    )
-    if not merged:
-        raise HTTPException(status_code=404, detail="No transcript search hits.")
-    return [
-        ChunkResult(
-            text=chunk.text,
-            chunk_type=chunk.chunk_type,
-            page_num=chunk.page_num,
-            section_title=chunk.section_title,
-            chunk_index=chunk.index,
-            score=score,
-            filing_type=ft,
-        )
-        for chunk, score, ft in merged
-    ]
-
-
-@app.post("/vector_store/search_transcripts_bm25", response_model=list[ChunkResult])
-def search_transcripts_bm25(request: TranscriptSearchRequest):
-    index = _require_vector_index()
-    year_s = str(request.year).strip()
-    merged = _search_transcript_chunks(
-        index,
-        ticker=request.ticker,
-        year=year_s,
-        query=request.query,
-        top_k=request.top_k,
-        quarter=request.quarter,
-        search_fn=_search_chunks_bm25,
     )
     if not merged:
         raise HTTPException(status_code=404, detail="No transcript search hits.")

@@ -23,6 +23,10 @@ class SECSettings(BaseSettings):
     embedding_server: str = "http://127.0.0.1:8002/v1"
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
 
+    # Reranker server (vLLM score/rerank runner)
+    reranker_server: str = "http://127.0.0.1:8003"
+    reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
+
     # ChromaDB vector persistence
     chroma_persist_dir: str = "./chroma_db"
     chroma_collection_name: str = "sec_filings"

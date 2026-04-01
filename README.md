@@ -1,15 +1,14 @@
 # Finance Data MCP
 
-A Python-first toolkit for SEC filing ingestion, OCR-to-Markdown conversion, transcript collection, and retrieval across **semantic** and **BM25 lexical** search.
+A Python-first toolkit for SEC filing ingestion, OCR-to-Markdown conversion, transcript collection, and retrieval across **hybrid retrieval** (dense + BM25) with reranking.
 
 ## What this project does
 
 - Downloads SEC filings and stores filing metadata.
 - Converts filing PDFs to Markdown via olmOCR.
 - Chunks and indexes filings/transcripts in Chroma.
-- Supports both:
-  - **Semantic search** (embedding similarity).
-  - **BM25 search** (keyword/lexical ranking).
+- Supports:
+  - **Hybrid search** (dense + BM25 reciprocal-rank-fusion + reranker).
 - Exposes workflows through:
   - FastAPI (`server.py`).
   - MCP server (`mcp_server.py`).
@@ -64,6 +63,7 @@ Start model servers:
 ```bash
 make vllm-olmocr-serve
 make vllm-embd-serve
+make vllm-reranker-serve
 ```
 
 Start API:
@@ -82,18 +82,15 @@ uv run --group ocr-md --group mcp python mcp_server.py
 
 ### SEC filings API
 
-- Semantic: `POST /vector_store/search_sec_filings`
-- BM25: `POST /vector_store/search_sec_filings_bm25`
+- Hybrid (dense + BM25 + reranker): `POST /vector_store/search_sec_filings`
 
 ### Transcript API
 
-- Semantic: `POST /vector_store/search_transcripts`
-- BM25: `POST /vector_store/search_transcripts_bm25`
+- Hybrid (dense + BM25 + reranker): `POST /vector_store/search_transcripts`
 
 ### MCP tools
 
-- Semantic: `search_sec_filings_tool`, `search_transcripts_tool`
-- BM25: `search_sec_filings_bm25_tool`, `search_transcripts_bm25_tool`
+- Hybrid: `search_sec_filings_tool`, `search_transcripts_tool`
 
 ## Core workflows
 
@@ -111,7 +108,7 @@ curl -s -X POST "http://127.0.0.1:8081/vector_store/embed_sec_filings" \
   -H "Content-Type: application/json" \
   -d '{"ticker":"AMZN","year":"2025","filing_type":"10-K","force":false}'
 
-curl -s -X POST "http://127.0.0.1:8081/vector_store/search_sec_filings_bm25" \
+curl -s -X POST "http://127.0.0.1:8081/vector_store/search_sec_filings" \
   -H "Content-Type: application/json" \
   -d '{"ticker":"AMZN","year":"2025","filing_type":"10-K","query":"operating income margin","top_k":5}'
 ```
@@ -124,14 +121,14 @@ Fetch quarterly transcripts:
 uv run python -m finance_data.earnings_transcripts.transcripts AMZN 2025
 ```
 
-Embed + BM25 search transcripts:
+Embed + hybrid search transcripts:
 
 ```bash
 curl -s -X POST "http://127.0.0.1:8081/vector_store/embed_transcripts" \
   -H "Content-Type: application/json" \
   -d '{"ticker":"AMZN","year":"2025","force":false}'
 
-curl -s -X POST "http://127.0.0.1:8081/vector_store/search_transcripts_bm25" \
+curl -s -X POST "http://127.0.0.1:8081/vector_store/search_transcripts" \
   -H "Content-Type: application/json" \
   -d '{"ticker":"AMZN","year":"2025","query":"AWS revenue growth","top_k":5}'
 ```

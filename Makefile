@@ -1,5 +1,6 @@
 MODEL := allenai/olmOCR-2-7B-1025-FP8
 EMBD_MODEL := Qwen/Qwen3-Embedding-0.6B
+RERANKER_MODEL := Qwen/Qwen3-Reranker-0.6B
 
 GPU_MEMORY_UTILIZATION      ?= 0.5
 EMBD_GPU_MEMORY_UTILIZATION ?= 0.1
@@ -8,6 +9,7 @@ TENSOR_PARALLEL_SIZE        ?= 1
 DATA_PARALLEL_SIZE          ?= 1
 PORT                        ?= 8000
 EMBD_PORT                   ?= 8002
+RERANKER_PORT               ?= 8003
 API_PORT                    ?= 8081
 SERVER                      ?= localhost
 IMAGE_NAME                  ?= sec-filings-md
@@ -36,6 +38,18 @@ vllm-embd-serve:
 		--runner pooling \
 		--max-model-len 8192 \
 		--port $(EMBD_PORT) \
+		--host $(SERVER)
+
+.PHONY: vllm-reranker-serve
+vllm-reranker-serve:
+	CUDA_VISIBLE_DEVICES=$(GPU_DEVICE) uv run vllm serve $(RERANKER_MODEL) \
+		--task score \
+		--hf-overrides '{\
+\"architectures\": [\"Qwen3ForSequenceClassification\"], \
+\"classifier_from_token\": [\"no\", \"yes\"], \
+\"is_original_qwen3_reranker\": true\
+}' \
+		--port $(RERANKER_PORT) \
 		--host $(SERVER)
 
 .PHONY: start-server

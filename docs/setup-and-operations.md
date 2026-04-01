@@ -1,6 +1,6 @@
 # Setup and Operations
 
-This guide focuses on setup and runtime commands for API and MCP workflows, including BM25 search.
+This guide focuses on setup and runtime commands for API and MCP workflows, including hybrid retrieval and reranking.
 
 ## 1) Install dependencies
 
@@ -37,6 +37,7 @@ Defaults are defined in `finance_data/settings.py`.
 ```bash
 make vllm-olmocr-serve
 make vllm-embd-serve
+make vllm-reranker-serve
 ```
 
 Optional benchmark:
@@ -78,13 +79,12 @@ curl -s -X POST "http://127.0.0.1:8081/vector_store/embed_sec_filings" \
 
 Search indexed filings:
 
-- Semantic: `POST /vector_store/search_sec_filings`
-- BM25: `POST /vector_store/search_sec_filings_bm25`
+- Hybrid (dense + BM25 + reranker): `POST /vector_store/search_sec_filings`
 
-BM25 example:
+Hybrid example:
 
 ```bash
-curl -s -X POST "http://127.0.0.1:8081/vector_store/search_sec_filings_bm25" \
+curl -s -X POST "http://127.0.0.1:8081/vector_store/search_sec_filings" \
   -H "Content-Type: application/json" \
   -d '{"ticker":"AMZN","year":"2025","filing_type":"10-K","query":"operating margin guidance","top_k":5}'
 ```
@@ -107,13 +107,12 @@ curl -s -X POST "http://127.0.0.1:8081/vector_store/embed_transcripts" \
 
 Search transcript chunks:
 
-- Semantic: `POST /vector_store/search_transcripts`
-- BM25: `POST /vector_store/search_transcripts_bm25`
+- Hybrid (dense + BM25 + reranker): `POST /vector_store/search_transcripts`
 
-BM25 example:
+Hybrid example:
 
 ```bash
-curl -s -X POST "http://127.0.0.1:8081/vector_store/search_transcripts_bm25" \
+curl -s -X POST "http://127.0.0.1:8081/vector_store/search_transcripts" \
   -H "Content-Type: application/json" \
   -d '{"ticker":"AMZN","year":"2025","query":"AWS demand trends","top_k":5}'
 ```
@@ -133,12 +132,10 @@ Then:
 3. Restart `mcp_server.py`.
 4. Connect clients to `https://<hostname>/mcp`.
 
-MCP search tools include both semantic and BM25 variants:
+MCP search tools use the hybrid retrieval pipeline:
 
 - `search_sec_filings_tool`
-- `search_sec_filings_bm25_tool`
 - `search_transcripts_tool`
-- `search_transcripts_bm25_tool`
 
 ## 8) Docker commands
 

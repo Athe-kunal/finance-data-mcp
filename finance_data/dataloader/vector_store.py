@@ -14,6 +14,7 @@ from chromadb.api.models.Collection import Collection
 from openai import OpenAI
 
 from finance_data.dataloader.text_splitter import Chunk, chunk_markdown
+from finance_data.dataloader.reranker import VllmRerankerClient
 from finance_data.earnings_transcripts.transcripts import Transcript
 from finance_data.filings.models import SecFilingType
 from finance_data.settings import sec_settings
@@ -108,6 +109,12 @@ class _EmbeddedChunks:
     embeddings: np.ndarray
 
 
+@dataclass
+class _RankedChunk:
+    chunk: Chunk
+    score: float
+
+
 # ---------------------------------------------------------------------------
 # Dense embedding
 # ---------------------------------------------------------------------------
@@ -137,7 +144,7 @@ def embed_chunks(chunks: list[Chunk], client: OpenAI, model: str) -> np.ndarray:
 
 
 class ChromaVectorStore:
-    """Chroma dense index for semantic search + in-memory rank_bm25 for lexical search."""
+    """Chroma index with dense/sparse hybrid retrieval and reranking."""
 
     def __init__(
         self,
@@ -145,11 +152,15 @@ class ChromaVectorStore:
         collection_name: str | None = None,
         embedding_server: str | None = None,
         embedding_model: str | None = None,
+        reranker_server: str | None = None,
+        reranker_model: str | None = None,
     ) -> None:
         self._persist_dir = Path(persist_dir or sec_settings.chroma_persist_dir)
         self._collection_name = collection_name or sec_settings.chroma_collection_name
         self._embedding_server = embedding_server or sec_settings.embedding_server
         self._embedding_model = embedding_model or sec_settings.embedding_model
+        self._reranker_server = reranker_server or sec_settings.reranker_server
+        self._reranker_model = reranker_model or sec_settings.reranker_model
 
         self._client = chromadb.PersistentClient(path=str(self._persist_dir))
         self._dense_collection: Collection = self._client.get_or_create_collection(
@@ -159,6 +170,10 @@ class ChromaVectorStore:
 
         # (ticker, year, filing_type) → (BM25Okapi index, ordered metadatas)
         self._bm25_cache: dict[tuple[str, str, str], tuple[Any, list[dict]]] = {}
+        self._reranker = VllmRerankerClient(
+            base_url=self._reranker_server,
+            model=self._reranker_model,
+        )
 
     def _make_client(self) -> OpenAI:
         return OpenAI(base_url=self._embedding_server, api_key="not-needed")
@@ -377,9 +392,7 @@ class ChromaVectorStore:
             bm25_index = self._embed_bm25(chunks)
             cache_key = (ticker, str(year), str(filing_type))
             self._bm25_cache[cache_key] = (bm25_index, [dict(m) for m in metadatas])
-            _log.info(
-                f"BM25 index cached for {cache_key=}, chunks={len(chunks)}"
-            )
+            _log.info(f"BM25 index cached for {cache_key=}, chunks={len(chunks)}")
 
     # ------------------------------------------------------------------
     # Public ingest methods
@@ -579,7 +592,7 @@ class ChromaVectorStore:
                 keys.add(IndexKey(ticker=t, year=y, filing_type=f))
         return sorted(keys)
 
-    def semantic_search(
+    def _semantic_search(
         self,
         ticker: str,
         year: str,
@@ -625,7 +638,7 @@ class ChromaVectorStore:
             hits.append((chunk, score))
         return hits
 
-    def search_bm25(
+    def _search_bm25(
         self,
         ticker: str,
         year: str,
@@ -647,6 +660,85 @@ class ChromaVectorStore:
             score = float(scores[i]) / max_score if max_score > 0.0 else 0.0
             hits.append((chunk, score))
         return hits
+
+    @staticmethod
+    def _reciprocal_rank_fusion(
+        dense_hits: list[tuple[Chunk, float]],
+        sparse_hits: list[tuple[Chunk, float]],
+        *,
+        dense_weight: float,
+        sparse_weight: float,
+        rrf_k: int,
+    ) -> list[_RankedChunk]:
+        fused_scores: dict[str, float] = {}
+        chunk_by_text: dict[str, Chunk] = {}
+
+        for rank, (chunk, _) in enumerate(dense_hits, start=1):
+            key = chunk.text
+            chunk_by_text[key] = chunk
+            fused_scores[key] = fused_scores.get(key, 0.0) + (
+                dense_weight / (rrf_k + rank)
+            )
+
+        for rank, (chunk, _) in enumerate(sparse_hits, start=1):
+            key = chunk.text
+            chunk_by_text[key] = chunk
+            fused_scores[key] = fused_scores.get(key, 0.0) + (
+                sparse_weight / (rrf_k + rank)
+            )
+
+        ranked = [
+            _RankedChunk(chunk=chunk_by_text[key], score=score)
+            for key, score in fused_scores.items()
+        ]
+        ranked.sort(key=lambda item: item.score, reverse=True)
+        return ranked
+
+    def hybrid_search(
+        self,
+        ticker: str,
+        year: str,
+        filing_type: SecFilingType | str,
+        query: str,
+        top_k: int = 5,
+        candidate_k: int = 200,
+        dense_weight: float = 0.7,
+        sparse_weight: float = 0.3,
+        rrf_k: int = 60,
+    ) -> list[tuple[Chunk, float]]:
+        """Run dense+sparse retrieval, fuse with RRF, then rerank with vLLM."""
+        dense_hits = self._semantic_search(
+            ticker=ticker,
+            year=year,
+            filing_type=filing_type,
+            query=query,
+            top_k=candidate_k,
+        )
+        sparse_hits = self._search_bm25(
+            ticker=ticker,
+            year=year,
+            filing_type=filing_type,
+            query=query,
+            top_k=candidate_k,
+        )
+        fused_hits = self._reciprocal_rank_fusion(
+            dense_hits,
+            sparse_hits,
+            dense_weight=dense_weight,
+            sparse_weight=sparse_weight,
+            rrf_k=rrf_k,
+        )
+        if not fused_hits:
+            return []
+
+        documents = [item.chunk.text for item in fused_hits]
+        reranked = self._reranker.rerank(query=query, documents=documents, top_k=top_k)
+
+        results: list[tuple[Chunk, float]] = []
+        for item in reranked:
+            chunk = fused_hits[item.index].chunk
+            results.append((chunk, item.score))
+        return results
 
     def __len__(self) -> int:
         return len(self.list_indexes())
