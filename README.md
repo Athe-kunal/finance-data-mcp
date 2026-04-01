@@ -1,4 +1,4 @@
-# sec-filings-data
+# Finance Data MCP
 
 A Python-first toolkit for SEC filing ingestion, OCR-to-Markdown conversion, transcript collection, and retrieval across **semantic** and **BM25 lexical** search.
 
