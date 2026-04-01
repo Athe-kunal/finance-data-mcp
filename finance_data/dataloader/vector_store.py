@@ -4,9 +4,8 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import Any, NamedTuple, Sequence
 
-from chromadb.base_types import SparseVector
 from chromadb.types import Metadata
 
 import chromadb
@@ -21,21 +20,80 @@ from finance_data.settings import sec_settings
 
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
-_BM25_EMBED_BATCH_SIZE = 512
 _CHROMA_MISSING_PAGE_NUM = -1
+_BM25_K1 = 1.2  # term-frequency saturation
+_BM25_B = 0.75  # length normalisation (0 = none, 1 = full)
 
 
-def _sparse_inner_product(left: SparseVector, right: SparseVector) -> float:
-    """Dot product for Chroma BM25 sparse vectors (shared hashed token dimensions)."""
-    if not left.indices or not right.indices:
-        return 0.0
-    right_by_index = dict(zip(right.indices, right.values))
-    total = 0.0
-    for idx, value in zip(left.indices, left.values):
-        other = right_by_index.get(idx)
-        if other is not None:
-            total += float(value) * float(other)
-    return total
+# ---------------------------------------------------------------------------
+# BM25 helpers (rank_bm25)
+# ---------------------------------------------------------------------------
+
+
+def _tokenize_for_bm25(text: str) -> list[str]:
+    return re.findall(r"\b\w+\b", text.lower())
+
+
+def _build_bm25_index(texts: list[str]) -> Any:
+    """Return a BM25Okapi index built from *texts* using project BM25 params."""
+    try:
+        from rank_bm25 import BM25Okapi
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "rank_bm25 is not installed. Install with `uv sync --group ocr-md`."
+        ) from exc
+
+    tokenized = [_tokenize_for_bm25(t) for t in texts]
+    return BM25Okapi(tokenized, k1=_BM25_K1, b=_BM25_B)
+
+
+# ---------------------------------------------------------------------------
+# Dense-collection upsert helper
+# ---------------------------------------------------------------------------
+
+
+def _upsert_to_collection(
+    collection: Collection,
+    *,
+    where: dict,
+    ids: list[str],
+    documents: list[str],
+    metadatas: list[Metadata],
+    embeddings: list,
+    force: bool,
+) -> bool:
+    """Check for existing docs, optionally delete, then add to *collection*.
+
+    Returns True if documents were written, False if skipped because
+    ``force=False`` and data already existed.
+    """
+    existing = collection.get(where=where, include=[])
+    existing_ids = existing.get("ids", [])
+
+    if existing_ids and not force:
+        _log.info(
+            "Collection %r already has %d docs for filter %s, skipping (force=False).",
+            collection.name,
+            len(existing_ids),
+            where,
+        )
+        return False
+
+    if existing_ids:
+        collection.delete(ids=existing_ids)
+
+    collection.add(
+        ids=ids,
+        embeddings=embeddings,
+        documents=documents,
+        metadatas=metadatas,
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Public types
+# ---------------------------------------------------------------------------
 
 
 class IndexKey(NamedTuple):
@@ -48,6 +106,11 @@ class IndexKey(NamedTuple):
 class _EmbeddedChunks:
     chunks: list[Chunk]
     embeddings: np.ndarray
+
+
+# ---------------------------------------------------------------------------
+# Dense embedding
+# ---------------------------------------------------------------------------
 
 
 def embed_chunks(chunks: list[Chunk], client: OpenAI, model: str) -> np.ndarray:
@@ -68,8 +131,13 @@ def embed_chunks(chunks: list[Chunk], client: OpenAI, model: str) -> np.ndarray:
     return matrix / norms
 
 
+# ---------------------------------------------------------------------------
+# Vector store
+# ---------------------------------------------------------------------------
+
+
 class ChromaVectorStore:
-    """Chroma-backed dense vector store with in-process Chroma BM25 lexical ranking."""
+    """Chroma dense index for semantic search + in-memory rank_bm25 for lexical search."""
 
     def __init__(
         self,
@@ -82,32 +150,15 @@ class ChromaVectorStore:
         self._collection_name = collection_name or sec_settings.chroma_collection_name
         self._embedding_server = embedding_server or sec_settings.embedding_server
         self._embedding_model = embedding_model or sec_settings.embedding_model
-        self._bm25_ef = None
 
         self._client = chromadb.PersistentClient(path=str(self._persist_dir))
-        self._collection: Collection = self._client.get_or_create_collection(
+        self._dense_collection: Collection = self._client.get_or_create_collection(
             name=self._collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
-    def _get_bm25_embedding_function(self):
-        if self._bm25_ef is not None:
-            return self._bm25_ef
-        try:
-            from chromadb.utils.embedding_functions import ChromaBm25EmbeddingFunction
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError(
-                "BM25 dependencies are not installed. Install with "
-                "`uv sync --group ocr-md`."
-            ) from exc
-
-        self._bm25_ef = ChromaBm25EmbeddingFunction(
-            k=1.2,
-            b=0.75,
-            avg_doc_length=4096.0,
-            token_max_length=40,
-        )
-        return self._bm25_ef
+        # (ticker, year, filing_type) → (BM25Okapi index, ordered metadatas)
+        self._bm25_cache: dict[tuple[str, str, str], tuple[Any, list[dict]]] = {}
 
     def _make_client(self) -> OpenAI:
         return OpenAI(base_url=self._embedding_server, api_key="not-needed")
@@ -208,7 +259,12 @@ class ChromaVectorStore:
         embeddings = embed_chunks(chunks, self._make_client(), self._embedding_model)
         return _EmbeddedChunks(chunks=chunks, embeddings=embeddings)
 
-    def _upsert_document_chunks(
+    def _embed_bm25(self, chunks: list[Chunk]) -> Any:
+        """Build a rank_bm25 BM25Okapi index from *chunks* (in-memory)."""
+        texts = [c.text for c in chunks]
+        return _build_bm25_index(texts)
+
+    def _build_chunk_records(
         self,
         *,
         ticker: str,
@@ -217,34 +273,12 @@ class ChromaVectorStore:
         filing_date: str | None,
         source_path: str,
         chunks: list[Chunk],
-        embeddings: np.ndarray,
-        force: bool,
-    ) -> None:
-        where = {
-            "$and": [
-                {"ticker": ticker},
-                {"year": str(year)},
-                {"filing_type": filing_type},
-            ]
-        }
-
-        dense_existing = self._collection.get(where=where, include=[])
-        dense_ids = dense_existing.get("ids", [])
-
-        if dense_ids and not force:
-            _log.info(
-                "Documents already exist for %s/%s/%s, skipping (force=False).",
-                ticker,
-                year,
-                filing_type,
-            )
-            return
-        if dense_ids:
-            self._collection.delete(ids=dense_ids)
-
+    ) -> tuple[list[str], list[str], list[Metadata]]:
+        """Return (ids, documents, metadatas) ready for collection.add."""
         ids: list[str] = []
-        metadatas: list[Metadata] = []
         documents: list[str] = []
+        metadatas: list[Metadata] = []
+
         for i, chunk in enumerate(chunks):
             chunk_id = f"{ticker}:{year}:{filing_type}:{i}"
             ids.append(chunk_id)
@@ -268,12 +302,88 @@ class ChromaVectorStore:
                 }
             )
 
-        self._collection.add(
+        return ids, documents, metadatas
+
+    def _get_or_build_bm25_index(
+        self,
+        ticker: str,
+        year: str,
+        filing_type: SecFilingType | str,
+    ) -> tuple[Any, list[dict]]:
+        """Return (BM25Okapi, metadatas) from cache or rebuilt from the dense collection."""
+        key = (ticker, str(year), str(filing_type))
+        if key in self._bm25_cache:
+            return self._bm25_cache[key]
+
+        where = {
+            "$and": [
+                {"ticker": ticker},
+                {"year": str(year)},
+                {"filing_type": filing_type},
+            ]
+        }
+        rows = self._dense_collection.get(where=where, include=["metadatas"])
+        metadatas: list[dict] = rows.get("metadatas") or []
+        if not metadatas:
+            raise FileNotFoundError(
+                f"No BM25 chunks found for {ticker=}, {year=}, {filing_type=}."
+            )
+
+        texts = [str(m.get("text", "")) for m in metadatas]
+        bm25_index = _build_bm25_index(texts)
+        self._bm25_cache[key] = (bm25_index, metadatas)
+        return bm25_index, metadatas
+
+    def _upsert_document_chunks(
+        self,
+        *,
+        ticker: str,
+        year: str,
+        filing_type: SecFilingType | str,
+        filing_date: str | None,
+        source_path: str,
+        chunks: list[Chunk],
+        embeddings: np.ndarray,
+        force: bool,
+    ) -> None:
+        where = {
+            "$and": [
+                {"ticker": ticker},
+                {"year": str(year)},
+                {"filing_type": filing_type},
+            ]
+        }
+
+        ids, documents, metadatas = self._build_chunk_records(
+            ticker=ticker,
+            year=str(year),
+            filing_type=filing_type,
+            filing_date=filing_date,
+            source_path=source_path,
+            chunks=chunks,
+        )
+
+        written = _upsert_to_collection(
+            self._dense_collection,
+            where=where,
             ids=ids,
-            embeddings=embeddings.tolist(),
             documents=documents,
             metadatas=metadatas,
+            embeddings=embeddings.tolist(),
+            force=force,
         )
+
+        if written:
+            bm25_index = self._embed_bm25(chunks)
+            cache_key = (ticker, str(year), str(filing_type))
+            self._bm25_cache[cache_key] = (bm25_index, [dict(m) for m in metadatas])
+            _log.info(
+                f"BM25 index cached for {cache_key=}, chunks={len(chunks)}"
+            )
+
+    # ------------------------------------------------------------------
+    # Public ingest methods
+    # ------------------------------------------------------------------
 
     def from_markdown_sec_filings(
         self,
@@ -416,8 +526,12 @@ class ChromaVectorStore:
 
         return ingested
 
+    # ------------------------------------------------------------------
+    # Query methods
+    # ------------------------------------------------------------------
+
     def list_filings(self, ticker: str, year: str) -> list[dict[str, str | None]]:
-        rows = self._collection.get(
+        rows = self._dense_collection.get(
             where={"$and": [{"ticker": ticker}, {"year": str(year)}]},
             include=["metadatas"],
         )
@@ -437,7 +551,7 @@ class ChromaVectorStore:
     def resolve_transcript_quarters(
         self, ticker: str, year: str
     ) -> tuple[str, list[str]] | None:
-        rows = self._collection.get(
+        rows = self._dense_collection.get(
             where={"$and": [{"ticker": ticker}, {"year": str(year)}]},
             include=["metadatas"],
         )
@@ -455,7 +569,7 @@ class ChromaVectorStore:
         return None
 
     def list_indexes(self) -> list[IndexKey]:
-        rows = self._collection.get(include=["metadatas"])
+        rows = self._dense_collection.get(include=["metadatas"])
         keys: set[IndexKey] = set()
         for metadata in rows.get("metadatas", []):
             t = str(metadata.get("ticker", ""))
@@ -490,7 +604,7 @@ class ChromaVectorStore:
             ]
         }
 
-        result = self._collection.query(
+        result = self._dense_collection.query(
             query_embeddings=[q_vec.tolist()],
             where=where,
             n_results=top_k,
@@ -511,23 +625,6 @@ class ChromaVectorStore:
             hits.append((chunk, score))
         return hits
 
-    def search(
-        self,
-        ticker: str,
-        year: str,
-        filing_type: SecFilingType | str,
-        query: str,
-        top_k: int = 5,
-    ) -> list[tuple[Chunk, float]]:
-        """Backward-compatible alias for semantic search."""
-        return self.semantic_search(
-            ticker=ticker,
-            year=year,
-            filing_type=filing_type,
-            query=query,
-            top_k=top_k,
-        )
-
     def search_bm25(
         self,
         ticker: str,
@@ -536,53 +633,18 @@ class ChromaVectorStore:
         query: str,
         top_k: int = 5,
     ) -> list[tuple[Chunk, float]]:
-        """Rank chunks with ``ChromaBm25EmbeddingFunction`` sparse dot scores (in-process)."""
-        where = {
-            "$and": [
-                {"ticker": ticker},
-                {"year": str(year)},
-                {"filing_type": filing_type},
-            ]
-        }
-        rows = self._collection.get(where=where, include=["metadatas"])
-        metadatas = rows.get("metadatas") or []
-        if not metadatas:
-            raise FileNotFoundError(
-                "No BM25 chunks found for "
-                f"ticker={ticker}, year={year}, filing_type={filing_type}."
-            )
+        """Rank chunks with rank_bm25 BM25Okapi scores (cache-backed, rebuilt on miss)."""
+        bm25_index, metadatas = self._get_or_build_bm25_index(ticker, year, filing_type)
 
-        bm25_ef = self._get_bm25_embedding_function()
-        query_vec = bm25_ef.embed_query([query])[0]
-        texts = [str(m.get("text", "")) for m in metadatas]
-        doc_vectors: list[SparseVector] = []
-        for start in range(0, len(texts), _BM25_EMBED_BATCH_SIZE):
-            batch = texts[start : start + _BM25_EMBED_BATCH_SIZE]
-            doc_vectors.extend(bm25_ef(batch))
-
-        raw_scores = [
-            _sparse_inner_product(query_vec, doc_vec) for doc_vec in doc_vectors
-        ]
-        max_score = max(raw_scores, default=0.0)
-        _log.info(
-            f"{query=}, {len(metadatas)=}, {max_score=}",
-        )
-
-        order = sorted(
-            range(len(metadatas)),
-            key=lambda i: raw_scores[i],
-            reverse=True,
-        )[:top_k]
+        scores = bm25_index.get_scores(_tokenize_for_bm25(query))
+        top_indices = np.argsort(scores)[-top_k:][::-1]
+        max_score = float(scores[top_indices[0]]) if len(top_indices) else 0.0
+        _log.info(f"{query=}, {len(metadatas)=}, {max_score=}")
 
         hits: list[tuple[Chunk, float]] = []
-        for i in order:
-            meta = metadatas[i]
-            chunk = self._parse_chunk_metadata(dict(meta))
-            raw = raw_scores[i]
-            if max_score > 0.0:
-                score = float(raw) / float(max_score)
-            else:
-                score = 0.0
+        for i in top_indices:
+            chunk = self._parse_chunk_metadata(dict(metadatas[i]))
+            score = float(scores[i]) / max_score if max_score > 0.0 else 0.0
             hits.append((chunk, score))
         return hits
 

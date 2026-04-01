@@ -1,6 +1,6 @@
 [project]
 name = "finance_data_llm"
-version = "0.1.5"
+version = "0.1.6"
 description = "SEC filings and Earnings call transcripts data"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -25,11 +25,11 @@ ocr-md = [
     "vllm>=0.17.1",
     "guidellm[recommended]>=0.5.4",
     "nvitop>=1.6.2",
-    "chromadb>=1.0.20",
-    "snowballstemmer>=2.2.0",
+    "chromadb>=1.5.5",
     "openai>=1.0",
     "langchain-text-splitters>=0.3.0",
     "markdownify>=0.13.1",
+    "rank-bm25>=0.2.2",
 ]
 mcp = [
     "fastmcp>=3.1.1",

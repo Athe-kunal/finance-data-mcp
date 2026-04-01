@@ -1,5 +1,7 @@
 """Pydantic models used by FastAPI endpoints."""
 
+from typing import Literal
+
 from pydantic import BaseModel, field_validator
 
 from finance_data.earnings_transcripts.transcripts import quarter_label_to_num
@@ -31,6 +33,12 @@ class EarningsTranscriptQuarterRequest(BaseModel):
     @classmethod
     def validate_quarter_label(cls, value: str) -> str:
         return f"Q{quarter_label_to_num(value)}"
+
+
+class EarningsTranscriptQuarterEmbedRequest(EarningsTranscriptQuarterRequest):
+    """Request to download one earnings transcript and embed it."""
+
+    force: bool = False
 
 
 class SecMainToMarkdownRequest(BaseModel):
@@ -150,6 +158,7 @@ class TranscriptSearchRequest(BaseModel):
     year: str
     query: str
     top_k: int = 5
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"] | None = None
 
 
 class SecFilingsListRequest(BaseModel):

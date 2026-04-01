@@ -95,6 +95,7 @@ def _search_transcripts_common(
     year: str,
     query: str,
     top_k: int,
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"] | None,
     search_fn: Callable[..., list[tuple[Chunk, float]]],
 ) -> list[tuple[Chunk, float, str]]:
     resolved = vector_index.resolve_transcript_quarters(ticker, year)
@@ -102,16 +103,29 @@ def _search_transcripts_common(
         raise FileNotFoundError("No transcript indexes (Q1–Q4) for this ticker/year.")
 
     ticker_key, quarters = resolved
+    if quarter is not None:
+        q_key = quarter.upper()
+        if q_key not in quarters:
+            available = ", ".join(quarters)
+            raise ValueError(
+                f"No indexed transcript for {q_key} for this ticker/year "
+                f"(available: {available})."
+            )
+        quarters = [q_key]
+
     merged: list[tuple[Chunk, float, str]] = []
     for filing_type in quarters:
-        hits = search_fn(
-            vector_index=vector_index,
-            ticker=ticker_key,
-            year=year,
-            filing_type=filing_type,
-            query=query,
-            top_k=top_k,
-        )
+        try:
+            hits = search_fn(
+                vector_index=vector_index,
+                ticker=ticker_key,
+                year=year,
+                filing_type=filing_type,
+                query=query,
+                top_k=top_k,
+            )
+        except FileNotFoundError:
+            continue
         for chunk, score in hits:
             merged.append((chunk, score, filing_type))
     merged.sort(key=lambda item: -item[1])
@@ -406,8 +420,9 @@ def search_transcripts_tool(
     year: str,
     query: str,
     top_k: int = 5,
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"] | None = None,
 ) -> str:
-    """Run semantic search across all indexed transcript quarters.
+    """Run semantic search over indexed transcript chunks.
 
     **Prerequisite — transcripts must be indexed before searching:**
     Before calling this tool, verify that at least one quarterly transcript for the
@@ -422,6 +437,8 @@ def search_transcripts_tool(
         year: Transcript year.
         query: Natural-language search query.
         top_k: Maximum number of chunks to return after quarter-level merging.
+        quarter: If set, search only that quarter (``Q1``–``Q4``). If omitted, merge
+            hits across all indexed quarters for the year (same as the HTTP API).
     """
     year_s = str(year).strip()
     vector_index = _get_vector_index()
@@ -431,6 +448,7 @@ def search_transcripts_tool(
         year=year_s,
         query=query,
         top_k=top_k,
+        quarter=quarter,
         search_fn=_semantic_search,
     )
     return "\n\n".join([chunk.text for chunk, _, _ in merged])
@@ -442,8 +460,14 @@ def search_transcripts_bm25_tool(
     year: str,
     query: str,
     top_k: int = 5,
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"] | None = None,
 ) -> str:
-    """Run BM25 search across all indexed transcript quarters."""
+    """Run BM25 search over indexed transcript chunks.
+
+    Args:
+        quarter: If set, search only that quarter (``Q1``–``Q4``). If omitted, merge
+            across all indexed quarters for the year.
+    """
     year_s = str(year).strip()
     vector_index = _get_vector_index()
     merged = _search_transcripts_common(
@@ -452,6 +476,7 @@ def search_transcripts_bm25_tool(
         year=year_s,
         query=query,
         top_k=top_k,
+        quarter=quarter,
         search_fn=_search_bm25,
     )
     return "\n\n".join([chunk.text for chunk, _, _ in merged])

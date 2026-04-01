@@ -9,7 +9,10 @@ from fastapi import FastAPI, HTTPException
 from finance_data.earnings_transcripts.transcripts import (
     get_transcript_for_quarter_async,
 )
-from finance_data.dataloader.pipeline import sec_main_to_markdown_and_embed
+from finance_data.dataloader.pipeline import (
+    earnings_transcripts_main_and_embed,
+    sec_main_to_markdown_and_embed,
+)
 from finance_data.filings.sec_data import (
     sec_main,
     sec_main_to_markdown,
@@ -28,6 +31,7 @@ from finance_data.server_api.models import (
     BatchSecFilingsRequest,
     ChunkResult,
     CompanyNameRequest,
+    EarningsTranscriptQuarterEmbedRequest,
     EarningsTranscriptQuarterRequest,
     RunOlmoOcrRequest,
     SecFilingsEmbedRequest,
@@ -124,6 +128,7 @@ def _search_transcript_chunks(
     year: str,
     query: str,
     top_k: int,
+    quarter: str | None,
     search_fn: Callable[..., list[tuple[Any, float]]],
 ) -> list[tuple[Any, float, str]]:
     resolved = index.resolve_transcript_quarters(ticker, year)
@@ -134,6 +139,18 @@ def _search_transcript_chunks(
         )
 
     ticker_key, quarters = resolved
+    if quarter is not None:
+        q_key = quarter.upper()
+        if q_key not in quarters:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No indexed transcript for {q_key} for this ticker/year "
+                    f"(available: {', '.join(quarters)})."
+                ),
+            )
+        quarters = [q_key]
+
     merged: list[tuple[Any, float, str]] = []
     for filing_type in quarters:
         try:
@@ -189,6 +206,25 @@ async def earnings_transcript_for_quarter(request: EarningsTranscriptQuarterRequ
             detail="Transcript not available for this ticker, year, and quarter",
         )
     return dataclasses.asdict(transcript)
+
+
+@app.post("/earnings_transcripts/main_and_embed")
+async def earnings_transcripts_main_and_embed_endpoint(
+    request: EarningsTranscriptQuarterEmbedRequest,
+):
+    try:
+        return await earnings_transcripts_main_and_embed(
+            ticker=request.ticker,
+            year=request.year,
+            quarter=request.quarter,
+            force=request.force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/sec_main")
@@ -459,6 +495,7 @@ def search_transcripts(request: TranscriptSearchRequest):
         year=year_s,
         query=request.query,
         top_k=request.top_k,
+        quarter=request.quarter,
         search_fn=_search_chunks,
     )
     if not merged:
@@ -487,6 +524,7 @@ def search_transcripts_bm25(request: TranscriptSearchRequest):
         year=year_s,
         query=request.query,
         top_k=request.top_k,
+        quarter=request.quarter,
         search_fn=_search_chunks_bm25,
     )
     if not merged:
