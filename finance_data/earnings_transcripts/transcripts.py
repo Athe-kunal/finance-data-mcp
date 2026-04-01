@@ -121,6 +121,12 @@ class TranscriptUrlDoesNotExistError(Exception):
     pass
 
 
+@dataclasses.dataclass(frozen=True)
+class TranscriptSource:
+    name: str
+    url: str
+
+
 def quarter_label_to_num(quarter: str) -> int:
     """Parse a quarter label (e.g. ``Q1``, ``q2``, ``Q 3``) into 1–4."""
     match = re.fullmatch(r"\s*Q\s*([1-4])\s*", quarter.strip(), flags=re.IGNORECASE)
@@ -136,6 +142,15 @@ def _make_url(ticker: str, year: int, quarter_num: int) -> str:
     assert year <= curr_year, f"{year=} is in the future for {ticker=} in {curr_year=}"
     assert quarter_num in [1, 2, 3, 4], f"{quarter_num=} is not a valid quarter number"
     return f"https://discountingcashflows.com/company/{ticker}/transcripts/{year}/{quarter_num}/"
+
+
+def _make_earningscall_biz_url(ticker: str, year: int, quarter_num: int) -> str:
+    curr_year = datetime.datetime.now().year
+    assert year <= curr_year, f"{year=} is in the future for {ticker=} in {curr_year=}"
+    assert quarter_num in [1, 2, 3, 4], f"{quarter_num=} is not a valid quarter number"
+    return (
+        f"https://earningscall.biz/e/nasdaq/s/{ticker.lower()}/y/{year}/q/q{quarter_num}"
+    )
 
 
 def _probe_transcript_url(url: str, *, timeout_sec: float = 20.0) -> None:
@@ -161,6 +176,22 @@ def _probe_transcript_url(url: str, *, timeout_sec: float = 20.0) -> None:
         raise TranscriptUrlDoesNotExistError(
             f"Transcript URL unreachable: {url} ({exc.reason!r})"
         ) from exc
+
+
+def _build_transcript_sources(
+    ticker: str, year: int, quarter_num: int
+) -> list[TranscriptSource]:
+    primary = TranscriptSource(
+        name="discountingcashflows",
+        url=_make_url(ticker=ticker, year=year, quarter_num=quarter_num),
+    )
+    fallback = TranscriptSource(
+        name="earningscall.biz",
+        url=_make_earningscall_biz_url(
+            ticker=ticker, year=year, quarter_num=quarter_num
+        ),
+    )
+    return [primary, fallback]
 
 
 def _chromium_launch_args() -> list[str]:
@@ -192,6 +223,11 @@ async def _new_browser_context(
 
 async def _wait_for_transcript_dom(page: Page) -> None:
     locator = page.locator("div.flex.flex-col.my-5").first
+    await locator.wait_for(state="visible", timeout=20_000)
+
+
+async def _wait_for_earningscall_biz_transcript_dom(page: Page) -> None:
+    locator = page.locator("div.content.without-focus").first
     await locator.wait_for(state="visible", timeout=20_000)
 
 
@@ -241,6 +277,48 @@ def _parse_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
             speaker_texts.append(SpeakerText(speaker=speaker, text=text))
 
     return speaker_texts
+
+
+def _parse_earningscall_biz_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
+    content = soup.select_one("div.content.without-focus")
+    if content is None:
+        return []
+
+    speaker_sections = content.select("div.speaker")
+    speaker_texts: list[SpeakerText] = []
+
+    for section in speaker_sections:
+        speaker_tag = section.select_one("div.speaker-name")
+        speaker = speaker_tag.get_text(" ", strip=True) if speaker_tag else ""
+
+        text_tag = section.find_next_sibling("div")
+        call_text = ""
+        if text_tag is not None:
+            call_paragraph = text_tag.select_one("p.call-text")
+            if call_paragraph is not None:
+                call_text = call_paragraph.get_text(" ", strip=True)
+
+        if speaker or call_text:
+            speaker_texts.append(SpeakerText(speaker=speaker, text=call_text))
+
+    return speaker_texts
+
+
+def _parse_transcript_from_source(
+    soup: BeautifulSoup,
+    source_name: str,
+    quarter_num: int,
+) -> tuple[int, str, list[SpeakerText]]:
+    if source_name == "discountingcashflows":
+        parsed_quarter, date_iso = _parse_transcript_metadata(soup, quarter_num)
+        speaker_texts = _parse_speaker_texts(soup)
+        return parsed_quarter, date_iso, speaker_texts
+
+    if source_name == "earningscall.biz":
+        speaker_texts = _parse_earningscall_biz_speaker_texts(soup)
+        return quarter_num, "", speaker_texts
+
+    raise ValueError(f"Unsupported transcript source: {source_name}")
 
 
 def save_transcript_markdown(transcript: Transcript) -> Path:
@@ -298,23 +376,38 @@ async def _load_transcript_with_new_page(
     year: int,
     quarter_num: int,
 ) -> Transcript:
-    url = _make_url(ticker, year, quarter_num)
+    sources = _build_transcript_sources(
+        ticker=ticker, year=year, quarter_num=quarter_num
+    )
+    source = sources[0]
 
-    # urllib is blocking, so push it off the event loop.
-    await asyncio.to_thread(_probe_transcript_url, url)
+    try:
+        await asyncio.to_thread(_probe_transcript_url, source.url)
+    except HTTPError as exc:
+        if exc.code == 403:
+            source = sources[1]
+            await asyncio.to_thread(_probe_transcript_url, source.url)
+        else:
+            raise
 
     page = await context.new_page()
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-        await _wait_for_transcript_dom(page)
+        await page.goto(source.url, wait_until="domcontentloaded", timeout=30_000)
+        if source.name == "discountingcashflows":
+            await _wait_for_transcript_dom(page)
+        else:
+            await _wait_for_earningscall_biz_transcript_dom(page)
 
         soup = BeautifulSoup(await page.content(), "html.parser")
-        parsed_quarter, date_iso = _parse_transcript_metadata(soup, quarter_num)
-        speaker_texts = _parse_speaker_texts(soup)
+        parsed_quarter, date_iso, speaker_texts = _parse_transcript_from_source(
+            soup=soup,
+            source_name=source.name,
+            quarter_num=quarter_num,
+        )
 
         if not speaker_texts:
             raise ValueError(
-                f"No speaker blocks parsed for {ticker=} {year=} {quarter_num=}"
+                f"No speaker blocks parsed for {ticker=} {year=} {quarter_num=} source={source.name}"
             )
 
         transcript = Transcript(
