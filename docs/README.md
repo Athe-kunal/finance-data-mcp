@@ -1,11 +1,11 @@
 # Documentation
 
-This folder contains practical guides for running this repository.
+Operational guides for `sec-filings-data`.
 
 ## Guides
 
-- `setup-and-operations.md`: Installation, Docker setup, Makefile argument explanation, server startup, ngrok usage, and command reference.
+- `setup-and-operations.md`: environment setup, service startup, API/MCP operations, and BM25 + semantic search workflows.
 
-## Minimum hardware
+## Runtime note
 
-For local model serving, use a GPU with **at least 12 GB VRAM** for the olmOCR model and the Qwen embedding model.
+For local model serving (olmOCR + embedding model), use a GPU with enough VRAM for your selected models (12 GB+ is a practical baseline for the defaults).

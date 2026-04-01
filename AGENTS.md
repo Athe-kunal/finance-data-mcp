@@ -1,40 +1,48 @@
 ## Repository layout
-- **`finance_data/`** — library package: `filings/` (SEC download + helpers), `ocr/` (olmOCR pipeline), `dataloader/` (chunking, Chroma), `earnings_transcripts/`, `server_api/` (FastAPI models and batch helpers), `finance_data_api/` (packaged CLI entry only).
-- **Repo root** — `server.py` (FastAPI app), `mcp_server.py` (MCP entrypoint). Shared env/settings live in `finance_data/settings.py` (`finance_data.settings`). Root entry modules are listed under `py-modules` in `pyproject.toml`; library code under `finance_data*` is discovered via `packages.find`.
+- **`finance_data/`** — library package:
+  - `filings/`: SEC download + helpers.
+  - `ocr/`: olmOCR pipeline.
+  - `dataloader/`: chunking, Chroma indexing, semantic + BM25 retrieval.
+  - `earnings_transcripts/`: transcript fetch + persistence.
+  - `server_api/`: FastAPI models + batch helpers.
+  - `finance_data_api/`: packaged CLI entrypoint.
+- **Repo root** — `server.py` (FastAPI app), `mcp_server.py` (MCP entrypoint).
+- Shared settings live in `finance_data/settings.py`.
 
 ## Dev environment tips
-- This repository is Python-first and uses `uv` for environment and dependency management.
-- Run `uv sync` for the default development environment.
-- Run `uv sync --group ocr-md` when working on OCR/embedding pipelines.
-- Run `uv sync --group ocr-md --group mcp` when working on the MCP server.
-- Use `uv run <command>` so commands execute inside the managed project environment.
-- Keep runtime configuration in environment variables or `.env` (see `finance_data/settings.py` and `README.md`).
-- Prefer `Makefile` targets for model serving, API serving, benchmarking, and Docker workflows.
+- Use `uv` for dependency and environment management.
+- `uv sync` for default development dependencies.
+- `uv sync --group ocr-md` for OCR/embedding/BM25 retrieval workflows.
+- `uv sync --group ocr-md --group mcp` for MCP workflows.
+- Prefer `uv run <command>` for project commands.
+- Keep runtime config in environment variables or `.env`.
 
 ## Testing instructions
-- Run lightweight validation before committing:
+- Run lightweight validation before commit:
   - `uv run python -m compileall .`
-- If you modify API/server logic, verify imports:
+- If you modify API/server logic:
   - `uv run python -c "import server"`
   - `uv run python -c "import finance_data.server_api.models"`
-- If you modify SEC download or OCR pipelines, verify module imports:
-  - `uv run python -c "import finance_data.filings.sec_data, finance_data.ocr.olmocr_pipeline"`
-- If you modify MCP workflows, verify the MCP server imports:
+- If you modify filings/OCR/vector retrieval logic (including BM25):
+  - `uv run python -c "import finance_data.filings.sec_data, finance_data.ocr.olmocr_pipeline, finance_data.dataloader.vector_store"`
+- If you modify transcript retrieval/search logic:
+  - `uv run python -c "import finance_data.earnings_transcripts.transcripts"`
+- If you modify MCP workflows:
   - `uv run --group ocr-md --group mcp python -c "import mcp_server"`
-- Add or update tests when behavior changes.
+- Add or update tests whenever behavior changes.
 
 ## PR instructions
 - Title format: `[sec-filings-data] <Title>`.
-- Include a short validation section listing exact commands run.
-- Keep this file aligned with the repository's current Python/`uv` workflow.
+- Include a short validation section with exact commands run.
+- Keep this file aligned with the current Python/`uv` workflow and supported retrieval features (semantic + BM25).
 
 ## Makefile commands
-- `make vllm-olmocr-serve`: Starts the vLLM server for olmOCR.
-- `make vllm-embd-serve`: Starts the embedding vLLM server (pooling runner).
-- `make start-server`: Runs the FastAPI app with Uvicorn on `0.0.0.0` using `API_PORT`.
-- `make guidellm-benchmark`: Runs throughput benchmarking against the local vLLM endpoint and writes `benchmark.yaml`.
-- `make docker-build`: Builds the Docker image using `IMAGE_NAME`.
-- `make docker-run`: Runs the Docker image with GPU, SEC API environment variables, mounted data/workspace volumes, and port mapping.
-- `make docker-start`: Builds then runs the Docker container.
-- `make docker-stop`: Stops container(s) publishing `API_PORT`.
-- `make docker-remove`: Removes container(s) publishing `API_PORT`.
+- `make vllm-olmocr-serve`: Start the vLLM server for olmOCR.
+- `make vllm-embd-serve`: Start the embedding vLLM server (pooling runner).
+- `make start-server`: Run FastAPI with Uvicorn using `API_PORT`.
+- `make guidellm-benchmark`: Run throughput benchmarking and write `benchmark.yaml`.
+- `make docker-build`: Build the Docker image using `IMAGE_NAME`.
+- `make docker-run`: Run the Docker image with GPU, SEC API env vars, volumes, and port mapping.
+- `make docker-start`: Build then run the Docker container.
+- `make docker-stop`: Stop container(s) publishing `API_PORT`.
+- `make docker-remove`: Remove container(s) publishing `API_PORT`.
