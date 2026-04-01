@@ -154,9 +154,7 @@ def _make_earningscall_url(
 ) -> str:
     _assert_transcript_params(ticker, year, quarter_num)
     slug = ticker.strip().lower()
-    return (
-        f"https://earningscall.biz/e/{exchange}/s/{slug}/y/{year}/q/q{quarter_num}"
-    )
+    return f"https://earningscall.biz/e/{exchange}/s/{slug}/y/{year}/q/q{quarter_num}"
 
 
 def _probe_transcript_url(url: str, *, timeout_sec: float = 20.0) -> None:
@@ -178,7 +176,9 @@ def _probe_transcript_url(url: str, *, timeout_sec: float = 20.0) -> None:
                 f"Transcript page does not exist (HTTP 404): {url}"
             ) from exc
         if exc.code == 403:
-            logger.warning(f"DCF transcript probe forbidden url={url} status={exc.code}")
+            logger.warning(
+                f"DCF transcript probe forbidden url={url} status={exc.code}"
+            )
             raise TranscriptSourceForbiddenError(
                 f"Transcript page forbidden (HTTP 403): {url}"
             ) from exc
@@ -304,9 +304,7 @@ def _parse_earningscall_date(soup: BeautifulSoup) -> str:
             continue
         month_s, day_s, year_s = match.groups()
         try:
-            parsed = datetime.datetime(
-                int(year_s), int(month_s), int(day_s)
-            )
+            parsed = datetime.datetime(int(year_s), int(month_s), int(day_s))
         except ValueError:
             continue
         iso_fb = parsed.strftime("%Y-%m-%d")
@@ -424,9 +422,7 @@ async def _load_transcript_discounting_cashflows_page(
     quarter_num: int,
 ) -> Transcript | None:
     """Load DCF transcript in an open page. Returns None when navigation returns HTTP 403."""
-    response = await page.goto(
-        dcf_url, wait_until="domcontentloaded", timeout=30_000
-    )
+    response = await page.goto(dcf_url, wait_until="domcontentloaded", timeout=30_000)
     if response is not None and response.status == 403:
         logger.warning(
             f"DCF transcript navigation forbidden url={dcf_url} status={response.status}"
@@ -540,9 +536,7 @@ async def _load_transcript_with_new_page(
             f"DCF forbidden; using earningscall.biz fallback "
             f"ticker={ticker} year={year} quarter={quarter_num} detail={exc}"
         )
-        return await _load_transcript_earningscall(
-            context, ticker, year, quarter_num
-        )
+        return await _load_transcript_earningscall(context, ticker, year, quarter_num)
 
     page = await context.new_page()
     try:
@@ -555,9 +549,7 @@ async def _load_transcript_with_new_page(
     finally:
         await page.close()
 
-    return await _load_transcript_earningscall(
-        context, ticker, year, quarter_num
-    )
+    return await _load_transcript_earningscall(context, ticker, year, quarter_num)
 
 
 async def _fetch_one_quarter(
@@ -641,20 +633,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "ticker",
         nargs="?",
-        default="AMZN",
+        default="AAPL",
         help="Stock ticker symbol (default: %(default)s)",
     )
     parser.add_argument(
         "year",
         nargs="?",
         type=int,
-        default=datetime.datetime.now().year - 1,
+        default=datetime.datetime.now().year,
         help="Fiscal year (default: current year - 1)",
     )
     parser.add_argument(
         "--quarter",
         type=str,
-        default="Q4",
+        default="Q1",
         metavar="QX",
         help="Quarter label: Q1, Q2, Q3, or Q4 (case-insensitive). "
         "If omitted, fetches Q1–Q4 sequentially.",
