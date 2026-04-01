@@ -19,6 +19,7 @@ _SEC_CHUNK_SIZE = 1024
 _SEC_CHUNK_OVERLAP = 128
 _EARNINGS_TRANSCRIPT_CHUNK_SIZE = 1024
 _EARNINGS_TRANSCRIPT_OVERLAP = 128
+_MIN_CHUNK_LENGTH = 100
 
 
 @dataclass
@@ -102,6 +103,46 @@ def _strip_last_line(text: str) -> str:
     return stripped[:last_newline].rstrip()
 
 
+def _merge_small_chunks(chunks: list[Chunk]) -> list[Chunk]:
+    """Merge chunks shorter than _MIN_CHUNK_LENGTH into adjacent chunks.
+
+    A small chunk is prepended to the next chunk. If no next chunk exists,
+    it is appended to the previous one. Chunks with no eligible neighbour
+    are left as-is.
+    """
+    merged: list[Chunk] = list(chunks)
+    i = 0
+    while i < len(merged):
+        if len(merged[i].text) >= _MIN_CHUNK_LENGTH:
+            i += 1
+            continue
+
+        if i + 1 < len(merged):
+            next_chunk = merged[i + 1]
+            merged[i + 1] = Chunk(
+                text=f"{merged[i].text}\n\n{next_chunk.text}",
+                chunk_type=next_chunk.chunk_type,
+                page_num=next_chunk.page_num,
+                section_title=next_chunk.section_title,
+                index=next_chunk.index,
+            )
+            merged.pop(i)
+        elif i > 0:
+            prev = merged[i - 1]
+            merged[i - 1] = Chunk(
+                text=f"{prev.text}\n\n{merged[i].text}",
+                chunk_type=prev.chunk_type,
+                page_num=prev.page_num,
+                section_title=prev.section_title,
+                index=prev.index,
+            )
+            merged.pop(i)
+        else:
+            i += 1
+
+    return merged
+
+
 def chunk_markdown(
     text: str,
     *,
@@ -117,11 +158,11 @@ def chunk_markdown(
     pages = _extract_pages(text)
 
     chunks: list[Chunk] = []
-    index = 0
     current_section: str | None = None
 
     for page_num, page_text in pages:
         non_table_parts, tables = _split_tables(page_text)
+        page_chunks: list[Chunk] = []
 
         for part_idx, part in enumerate(non_table_parts):
             clean_text = _PAGE_TAG_RE.sub("", part).strip()
@@ -133,36 +174,39 @@ def chunk_markdown(
 
             if text_body:
                 for split_text in splitter.split_text(text_body):
-                    chunks.append(
+                    page_chunks.append(
                         Chunk(
                             text=split_text,
                             chunk_type="text",
                             page_num=page_num,
                             section_title=current_section,
-                            index=index,
+                            index=0,
                         )
                     )
-                    index += 1
 
             if part_idx < len(tables):
                 table_markdown = markdownify.markdownify(
                     tables[part_idx].strip(), heading_style="ATX"
                 ).strip()
                 if table_markdown:
-                    if preceding_line:
-                        table_text = f"{preceding_line}\n\n{table_markdown}"
-                    else:
-                        table_text = table_markdown
-                    chunks.append(
+                    table_text = (
+                        f"{preceding_line}\n\n{table_markdown}"
+                        if preceding_line
+                        else table_markdown
+                    )
+                    page_chunks.append(
                         Chunk(
                             text=table_text,
                             chunk_type="table",
                             page_num=page_num,
                             section_title=current_section,
-                            index=index,
+                            index=0,
                         )
                     )
-                    index += 1
+
+        for chunk in _merge_small_chunks(page_chunks):
+            chunk.index = len(chunks)
+            chunks.append(chunk)
 
     return chunks
 

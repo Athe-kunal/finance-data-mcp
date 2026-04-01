@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Sequence
 
+from chromadb.base_types import SparseVector
 from chromadb.types import Metadata
 
 import chromadb
@@ -20,7 +21,21 @@ from finance_data.settings import sec_settings
 
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
+_BM25_EMBED_BATCH_SIZE = 512
 _CHROMA_MISSING_PAGE_NUM = -1
+
+
+def _sparse_inner_product(left: SparseVector, right: SparseVector) -> float:
+    """Dot product for Chroma BM25 sparse vectors (shared hashed token dimensions)."""
+    if not left.indices or not right.indices:
+        return 0.0
+    right_by_index = dict(zip(right.indices, right.values))
+    total = 0.0
+    for idx, value in zip(left.indices, left.values):
+        other = right_by_index.get(idx)
+        if other is not None:
+            total += float(value) * float(other)
+    return total
 
 
 class IndexKey(NamedTuple):
@@ -54,7 +69,7 @@ def embed_chunks(chunks: list[Chunk], client: OpenAI, model: str) -> np.ndarray:
 
 
 class ChromaVectorStore:
-    """Chroma-backed store with semantic and BM25 collections."""
+    """Chroma-backed dense vector store with in-process Chroma BM25 lexical ranking."""
 
     def __init__(
         self,
@@ -65,18 +80,19 @@ class ChromaVectorStore:
     ) -> None:
         self._persist_dir = Path(persist_dir or sec_settings.chroma_persist_dir)
         self._collection_name = collection_name or sec_settings.chroma_collection_name
-        self._bm25_collection_name = sec_settings.chroma_bm25_collection_name
         self._embedding_server = embedding_server or sec_settings.embedding_server
         self._embedding_model = embedding_model or sec_settings.embedding_model
+        self._bm25_ef = None
 
         self._client = chromadb.PersistentClient(path=str(self._persist_dir))
         self._collection: Collection = self._client.get_or_create_collection(
             name=self._collection_name,
             metadata={"hnsw:space": "cosine"},
         )
-        self._bm25_collection: Collection = self._create_bm25_collection()
 
-    def _create_bm25_collection(self) -> Collection:
+    def _get_bm25_embedding_function(self):
+        if self._bm25_ef is not None:
+            return self._bm25_ef
         try:
             from chromadb.utils.embedding_functions import ChromaBm25EmbeddingFunction
         except ModuleNotFoundError as exc:
@@ -85,11 +101,13 @@ class ChromaVectorStore:
                 "`uv sync --group ocr-md`."
             ) from exc
 
-        bm25_embedding = ChromaBm25EmbeddingFunction()
-        return self._client.get_or_create_collection(
-            name=self._bm25_collection_name,
-            embedding_function=bm25_embedding,
+        self._bm25_ef = ChromaBm25EmbeddingFunction(
+            k=1.2,
+            b=0.75,
+            avg_doc_length=4096.0,
+            token_max_length=40,
         )
+        return self._bm25_ef
 
     def _make_client(self) -> OpenAI:
         return OpenAI(base_url=self._embedding_server, api_key="not-needed")
@@ -212,10 +230,8 @@ class ChromaVectorStore:
 
         dense_existing = self._collection.get(where=where, include=[])
         dense_ids = dense_existing.get("ids", [])
-        bm25_existing = self._bm25_collection.get(where=where, include=[])
-        bm25_ids = bm25_existing.get("ids", [])
 
-        if dense_ids and bm25_ids and not force:
+        if dense_ids and not force:
             _log.info(
                 "Documents already exist for %s/%s/%s, skipping (force=False).",
                 ticker,
@@ -225,8 +241,6 @@ class ChromaVectorStore:
             return
         if dense_ids:
             self._collection.delete(ids=dense_ids)
-        if bm25_ids:
-            self._bm25_collection.delete(ids=bm25_ids)
 
         ids: list[str] = []
         metadatas: list[Metadata] = []
@@ -257,11 +271,6 @@ class ChromaVectorStore:
         self._collection.add(
             ids=ids,
             embeddings=embeddings.tolist(),
-            documents=documents,
-            metadatas=metadatas,
-        )
-        self._bm25_collection.add(
-            ids=ids,
             documents=documents,
             metadatas=metadatas,
         )
@@ -309,6 +318,57 @@ class ChromaVectorStore:
             ingested.append(key)
 
         return ingested
+
+    def from_markdown_sec_filing(
+        self,
+        ticker: str,
+        year: str,
+        filing_type: str,
+        markdown_path: str | Path,
+        filing_date: str | None = None,
+        force: bool = False,
+    ) -> list[IndexKey]:
+        """Index a single SEC filing markdown file into ChromaDB.
+
+        Unlike ``from_markdown_sec_filings``, this method targets one specific
+        file whose path and filing_type are already known (e.g. from the OCR
+        pipeline output).
+
+        Args:
+            ticker: Stock ticker symbol (e.g. ``"AAPL"``).
+            year: Filing year (e.g. ``"2024"``).
+            filing_type: Filing form name (e.g. ``"10-K"`` or ``"10-Q1"``).
+            markdown_path: Path to the ``.md`` file produced by olmOCR.
+            filing_date: ISO date string from the SEC result, or ``None``.
+            force: If ``True``, delete and re-embed even if already indexed.
+
+        Returns:
+            A one-element list containing the ``IndexKey`` for the indexed filing.
+        """
+        md_path = Path(markdown_path)
+        if not md_path.exists():
+            raise FileNotFoundError(f"Markdown file not found: {md_path}")
+
+        _log.info(f"Indexing SEC filing {ticker=} {year=} {filing_type=} {md_path=}")
+
+        markdown_text = md_path.read_text(encoding="utf-8")
+        chunks = chunk_markdown(markdown_text)
+        embedded = self._embed_for_upsert(chunks)
+
+        self._upsert_document_chunks(
+            ticker=ticker,
+            year=str(year),
+            filing_type=filing_type,
+            filing_date=filing_date,
+            source_path=str(md_path),
+            chunks=embedded.chunks,
+            embeddings=embedded.embeddings,
+            force=force,
+        )
+
+        key = IndexKey(ticker=ticker, year=str(year), filing_type=filing_type)
+        _log.info(f"Indexed SEC filing {key=}")
+        return [key]
 
     def from_earnings_transcript_markdown(
         self,
@@ -476,6 +536,7 @@ class ChromaVectorStore:
         query: str,
         top_k: int = 5,
     ) -> list[tuple[Chunk, float]]:
+        """Rank chunks with ``ChromaBm25EmbeddingFunction`` sparse dot scores (in-process)."""
         where = {
             "$and": [
                 {"ticker": ticker},
@@ -483,29 +544,47 @@ class ChromaVectorStore:
                 {"filing_type": filing_type},
             ]
         }
-        result = self._bm25_collection.query(
-            query_texts=[query],
-            where=where,
-            n_results=top_k,
-            include=["metadatas", "distances"],
-        )
-        metadatas = result.get("metadatas", [[]])[0]
-        distances = result.get("distances", [[]])[0]
+        rows = self._collection.get(where=where, include=["metadatas"])
+        metadatas = rows.get("metadatas") or []
         if not metadatas:
             raise FileNotFoundError(
                 "No BM25 chunks found for "
                 f"ticker={ticker}, year={year}, filing_type={filing_type}."
             )
 
+        bm25_ef = self._get_bm25_embedding_function()
+        query_vec = bm25_ef.embed_query([query])[0]
+        texts = [str(m.get("text", "")) for m in metadatas]
+        doc_vectors: list[SparseVector] = []
+        for start in range(0, len(texts), _BM25_EMBED_BATCH_SIZE):
+            batch = texts[start : start + _BM25_EMBED_BATCH_SIZE]
+            doc_vectors.extend(bm25_ef(batch))
+
+        raw_scores = [
+            _sparse_inner_product(query_vec, doc_vec) for doc_vec in doc_vectors
+        ]
+        max_score = max(raw_scores, default=0.0)
+        _log.info(
+            f"{query=}, {len(metadatas)=}, {max_score=}",
+        )
+
+        order = sorted(
+            range(len(metadatas)),
+            key=lambda i: raw_scores[i],
+            reverse=True,
+        )[:top_k]
+
         hits: list[tuple[Chunk, float]] = []
-        for metadata, distance in zip(metadatas, distances):
-            chunk = self._parse_chunk_metadata(metadata)
-            score = 1.0 - float(distance)
+        for i in order:
+            meta = metadatas[i]
+            chunk = self._parse_chunk_metadata(dict(meta))
+            raw = raw_scores[i]
+            if max_score > 0.0:
+                score = float(raw) / float(max_score)
+            else:
+                score = 0.0
             hits.append((chunk, score))
         return hits
 
     def __len__(self) -> int:
         return len(self.list_indexes())
-
-
-FaissVectorIndex = ChromaVectorStore

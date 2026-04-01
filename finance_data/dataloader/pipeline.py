@@ -18,7 +18,9 @@ from finance_data.settings import sec_settings
 from .repl_env import MarkdownReplEnvironment, markdown_to_repl_env
 
 
-def _matches_filing_type(sec_result: SecResults, filing_type: SecFilingType | str) -> bool:
+def _matches_filing_type(
+    sec_result: SecResults, filing_type: SecFilingType | str
+) -> bool:
     """Return True if sec_result matches the requested filing type."""
     ft = filing_type.strip().upper().replace(" ", "")
     if ft == "10-K":
