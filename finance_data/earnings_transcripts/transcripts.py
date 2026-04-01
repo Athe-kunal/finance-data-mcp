@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 from loguru import logger
 from playwright.async_api import (
     Browser,
@@ -121,6 +122,12 @@ class TranscriptUrlDoesNotExistError(Exception):
     pass
 
 
+class TranscriptSourceForbiddenError(Exception):
+    """Raised when the primary transcript host returns HTTP 403 (use fallback)."""
+
+    pass
+
+
 def quarter_label_to_num(quarter: str) -> int:
     """Parse a quarter label (e.g. ``Q1``, ``q2``, ``Q 3``) into 1–4."""
     match = re.fullmatch(r"\s*Q\s*([1-4])\s*", quarter.strip(), flags=re.IGNORECASE)
@@ -131,11 +138,23 @@ def quarter_label_to_num(quarter: str) -> int:
     return int(match.group(1))
 
 
-def _make_url(ticker: str, year: int, quarter_num: int) -> str:
+def _assert_transcript_params(ticker: str, year: int, quarter_num: int) -> None:
     curr_year = datetime.datetime.now().year
     assert year <= curr_year, f"{year=} is in the future for {ticker=} in {curr_year=}"
     assert quarter_num in [1, 2, 3, 4], f"{quarter_num=} is not a valid quarter number"
+
+
+def _make_url(ticker: str, year: int, quarter_num: int) -> str:
+    _assert_transcript_params(ticker, year, quarter_num)
     return f"https://discountingcashflows.com/company/{ticker}/transcripts/{year}/{quarter_num}/"
+
+
+def _make_earningscall_url(
+    ticker: str, year: int, quarter_num: int, exchange: str
+) -> str:
+    _assert_transcript_params(ticker, year, quarter_num)
+    slug = ticker.strip().lower()
+    return f"https://earningscall.biz/e/{exchange}/s/{slug}/y/{year}/q/q{quarter_num}"
 
 
 def _probe_transcript_url(url: str, *, timeout_sec: float = 20.0) -> None:
@@ -155,6 +174,13 @@ def _probe_transcript_url(url: str, *, timeout_sec: float = 20.0) -> None:
         if exc.code == 404:
             raise TranscriptUrlDoesNotExistError(
                 f"Transcript page does not exist (HTTP 404): {url}"
+            ) from exc
+        if exc.code == 403:
+            logger.warning(
+                f"DCF transcript probe forbidden url={url} status={exc.code}"
+            )
+            raise TranscriptSourceForbiddenError(
+                f"Transcript page forbidden (HTTP 403): {url}"
             ) from exc
         raise
     except URLError as exc:
@@ -192,6 +218,11 @@ async def _new_browser_context(
 
 async def _wait_for_transcript_dom(page: Page) -> None:
     locator = page.locator("div.flex.flex-col.my-5").first
+    await locator.wait_for(state="visible", timeout=20_000)
+
+
+async def _wait_for_earningscall_dom(page: Page) -> None:
+    locator = page.locator("div.content.without-focus").first
     await locator.wait_for(state="visible", timeout=20_000)
 
 
@@ -243,6 +274,97 @@ def _parse_speaker_texts(soup: BeautifulSoup) -> list[SpeakerText]:
     return speaker_texts
 
 
+def _parse_us_mmddyyyy_to_iso(text: str) -> str:
+    """Parse a US MM/DD/YYYY string to YYYY-MM-DD, or return an empty string."""
+    match = re.fullmatch(
+        r"\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*",
+        text.strip(),
+    )
+    if not match:
+        return ""
+    month_s, day_s, year_s = match.groups()
+    try:
+        parsed = datetime.datetime(int(year_s), int(month_s), int(day_s))
+    except ValueError:
+        return ""
+    return parsed.strftime("%Y-%m-%d")
+
+
+def _parse_earningscall_date(soup: BeautifulSoup) -> str:
+    for el in soup.select(".text-date"):
+        iso = _parse_us_mmddyyyy_to_iso(el.get_text())
+        if iso:
+            logger.info(f"{iso=} from earningscall.biz element .text-date")
+            return iso
+
+    pattern = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+    for node in soup.find_all(string=pattern):
+        match = pattern.search(str(node))
+        if not match:
+            continue
+        month_s, day_s, year_s = match.groups()
+        try:
+            parsed = datetime.datetime(int(year_s), int(month_s), int(day_s))
+        except ValueError:
+            continue
+        iso_fb = parsed.strftime("%Y-%m-%d")
+        logger.info(f"{iso_fb=} earningscall.biz date from regex fallback")
+        return iso_fb
+    return ""
+
+
+def _earningscall_call_text_for_speaker(
+    speaker_div: Tag,
+    next_speaker: Tag | None,
+) -> str:
+    for el in speaker_div.find_all_next():
+        if next_speaker is not None and el is next_speaker:
+            break
+        name = getattr(el, "name", None)
+        if name != "p":
+            continue
+        classes = el.get("class") or []
+        if "call-text" not in classes:
+            continue
+        return el.get_text(" ", strip=True)
+    return ""
+
+
+def _parse_earningscall_speaker_texts(content_root: Tag) -> list[SpeakerText]:
+    """Parse speaker rows inside one ``div.content.without-focus`` section."""
+    speakers = content_root.select("div.speaker")
+    speaker_texts: list[SpeakerText] = []
+
+    for i, speaker_div in enumerate(speakers):
+        name_el = speaker_div.select_one(".speaker-name")
+        desig_el = speaker_div.select_one(".designation")
+        name = name_el.get_text(strip=True) if name_el else ""
+        desig = desig_el.get_text(strip=True) if desig_el else ""
+        if name and desig:
+            speaker_label = f"{name} · {desig}"
+        else:
+            speaker_label = name or desig
+
+        next_sp = speakers[i + 1] if i + 1 < len(speakers) else None
+        text = _earningscall_call_text_for_speaker(speaker_div, next_sp)
+
+        if speaker_label or text:
+            speaker_texts.append(SpeakerText(speaker=speaker_label, text=text))
+
+    return speaker_texts
+
+
+def _parse_earningscall_speaker_texts_from_sections(
+    sections: list[Tag],
+) -> list[SpeakerText]:
+    """Collect utterances from every ``div.content.without-focus`` block."""
+    logger.info(f"{len(sections)=} for earningscall.biz transcript page")
+    combined: list[SpeakerText] = []
+    for section in sections:
+        combined.extend(_parse_earningscall_speaker_texts(section))
+    return combined
+
+
 def save_transcript_markdown(transcript: Transcript) -> Path:
     out_dir = (
         Path(sec_settings.earnings_transcripts_dir)
@@ -292,42 +414,142 @@ def convert_transcript_jsonl_to_markdown(
     return out_path
 
 
+async def _load_transcript_discounting_cashflows_page(
+    page: Page,
+    dcf_url: str,
+    ticker: str,
+    year: int,
+    quarter_num: int,
+) -> Transcript | None:
+    """Load DCF transcript in an open page. Returns None when navigation returns HTTP 403."""
+    response = await page.goto(dcf_url, wait_until="domcontentloaded", timeout=30_000)
+    if response is not None and response.status == 403:
+        logger.warning(
+            f"DCF transcript navigation forbidden url={dcf_url} status={response.status}"
+        )
+        return None
+
+    await _wait_for_transcript_dom(page)
+
+    soup = BeautifulSoup(await page.content(), "html.parser")
+    parsed_quarter, date_iso = _parse_transcript_metadata(soup, quarter_num)
+    speaker_texts = _parse_speaker_texts(soup)
+
+    if not speaker_texts:
+        raise ValueError(
+            f"No speaker blocks parsed for {ticker=} {year=} {quarter_num=}"
+        )
+
+    return Transcript(
+        ticker=ticker,
+        year=year,
+        quarter_num=parsed_quarter,
+        date=date_iso,
+        speaker_texts=speaker_texts,
+    )
+
+
+async def _load_transcript_earningscall(
+    context: BrowserContext,
+    ticker: str,
+    year: int,
+    quarter_num: int,
+) -> Transcript:
+    last_error: str | None = None
+    for exchange in ("nasdaq", "nyse"):
+        url = _make_earningscall_url(ticker, year, quarter_num, exchange)
+        logger.info(
+            f"Trying earningscall.biz transcript "
+            f"ticker={ticker} year={year} quarter={quarter_num} "
+            f"exchange={exchange} url={url}"
+        )
+        page = await context.new_page()
+        try:
+            response = await page.goto(
+                url, wait_until="domcontentloaded", timeout=30_000
+            )
+            if response is not None and response.status in (403, 404):
+                logger.warning(
+                    f"Earningscall page not available url={url} status={response.status}"
+                )
+                last_error = f"HTTP {response.status}"
+                continue
+            try:
+                await _wait_for_earningscall_dom(page)
+            except PlaywrightTimeoutError as exc:
+                logger.warning(
+                    f"Earningscall DOM timeout exchange={exchange} url={url} error={exc}"
+                )
+                last_error = str(exc).strip()
+                continue
+
+            soup = BeautifulSoup(await page.content(), "html.parser")
+            content_sections = soup.select("div.content.without-focus")
+            if not content_sections:
+                logger.warning(
+                    f"Earningscall missing content sections exchange={exchange} url={url}"
+                )
+                last_error = "missing content root"
+                continue
+
+            date_iso = _parse_earningscall_date(soup)
+            speaker_texts = _parse_earningscall_speaker_texts_from_sections(
+                content_sections
+            )
+            if not speaker_texts:
+                logger.warning(
+                    f"No speaker blocks from earningscall exchange={exchange} url={url}"
+                )
+                last_error = "no speaker blocks"
+                continue
+
+            transcript = Transcript(
+                ticker=ticker,
+                year=year,
+                quarter_num=quarter_num,
+                date=date_iso,
+                speaker_texts=speaker_texts,
+            )
+            save_transcript_markdown(transcript)
+            return transcript
+        finally:
+            await page.close()
+
+    raise ValueError(
+        f"Earningscall.biz: no transcript for {ticker=} {year=} {quarter_num=}; "
+        f"last_error={last_error!r}"
+    )
+
+
 async def _load_transcript_with_new_page(
     context: BrowserContext,
     ticker: str,
     year: int,
     quarter_num: int,
 ) -> Transcript:
-    url = _make_url(ticker, year, quarter_num)
+    dcf_url = _make_url(ticker, year, quarter_num)
 
-    # urllib is blocking, so push it off the event loop.
-    await asyncio.to_thread(_probe_transcript_url, url)
+    try:
+        await asyncio.to_thread(_probe_transcript_url, dcf_url)
+    except TranscriptSourceForbiddenError as exc:
+        logger.warning(
+            f"DCF forbidden; using earningscall.biz fallback "
+            f"ticker={ticker} year={year} quarter={quarter_num} detail={exc}"
+        )
+        return await _load_transcript_earningscall(context, ticker, year, quarter_num)
 
     page = await context.new_page()
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-        await _wait_for_transcript_dom(page)
-
-        soup = BeautifulSoup(await page.content(), "html.parser")
-        parsed_quarter, date_iso = _parse_transcript_metadata(soup, quarter_num)
-        speaker_texts = _parse_speaker_texts(soup)
-
-        if not speaker_texts:
-            raise ValueError(
-                f"No speaker blocks parsed for {ticker=} {year=} {quarter_num=}"
-            )
-
-        transcript = Transcript(
-            ticker=ticker,
-            year=year,
-            quarter_num=parsed_quarter,
-            date=date_iso,
-            speaker_texts=speaker_texts,
+        transcript = await _load_transcript_discounting_cashflows_page(
+            page, dcf_url, ticker, year, quarter_num
         )
-        save_transcript_markdown(transcript)
-        return transcript
+        if transcript is not None:
+            save_transcript_markdown(transcript)
+            return transcript
     finally:
         await page.close()
+
+    return await _load_transcript_earningscall(context, ticker, year, quarter_num)
 
 
 async def _fetch_one_quarter(
@@ -403,25 +625,28 @@ async def get_transcript_for_quarter_async(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Fetch earnings call transcripts (discountingcashflows.com).",
+        description=(
+            "Fetch earnings call transcripts (discountingcashflows.com; "
+            "earningscall.biz on HTTP 403)."
+        ),
     )
     parser.add_argument(
         "ticker",
         nargs="?",
-        default="AMZN",
+        default="AAPL",
         help="Stock ticker symbol (default: %(default)s)",
     )
     parser.add_argument(
         "year",
         nargs="?",
         type=int,
-        default=datetime.datetime.now().year - 1,
+        default=datetime.datetime.now().year,
         help="Fiscal year (default: current year - 1)",
     )
     parser.add_argument(
         "--quarter",
         type=str,
-        default="Q4",
+        default="Q1",
         metavar="QX",
         help="Quarter label: Q1, Q2, Q3, or Q4 (case-insensitive). "
         "If omitted, fetches Q1–Q4 sequentially.",
