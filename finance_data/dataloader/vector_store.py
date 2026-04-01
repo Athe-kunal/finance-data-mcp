@@ -23,6 +23,10 @@ _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
 _BM25_EMBED_BATCH_SIZE = 512
 _CHROMA_MISSING_PAGE_NUM = -1
+_BM25_TERM_FREQUENCY_SATURATION = 1.2  # k1: controls how fast tf contribution saturates
+_BM25_LENGTH_NORMALIZATION = 0.75  # b: 0 = no length norm, 1 = full length norm
+_BM25_AVG_DOC_LENGTH = 300.0  # expected average token count per document
+_BM25_MAX_TOKEN_LENGTH = 40  # tokens longer than this are ignored
 
 
 def _sparse_inner_product(left: SparseVector, right: SparseVector) -> float:
@@ -102,10 +106,10 @@ class ChromaVectorStore:
             ) from exc
 
         self._bm25_ef = ChromaBm25EmbeddingFunction(
-            k=1.2,
-            b=0.75,
-            avg_doc_length=4096.0,
-            token_max_length=40,
+            k=_BM25_TERM_FREQUENCY_SATURATION,
+            b=_BM25_LENGTH_NORMALIZATION,
+            avg_doc_length=_BM25_AVG_DOC_LENGTH,
+            token_max_length=_BM25_MAX_TOKEN_LENGTH,
         )
         return self._bm25_ef
 

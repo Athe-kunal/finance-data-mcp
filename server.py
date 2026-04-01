@@ -9,7 +9,10 @@ from fastapi import FastAPI, HTTPException
 from finance_data.earnings_transcripts.transcripts import (
     get_transcript_for_quarter_async,
 )
-from finance_data.dataloader.pipeline import sec_main_to_markdown_and_embed
+from finance_data.dataloader.pipeline import (
+    earnings_transcripts_main_and_embed,
+    sec_main_to_markdown_and_embed,
+)
 from finance_data.filings.sec_data import (
     sec_main,
     sec_main_to_markdown,
@@ -28,6 +31,7 @@ from finance_data.server_api.models import (
     BatchSecFilingsRequest,
     ChunkResult,
     CompanyNameRequest,
+    EarningsTranscriptQuarterEmbedRequest,
     EarningsTranscriptQuarterRequest,
     RunOlmoOcrRequest,
     SecFilingsEmbedRequest,
@@ -189,6 +193,25 @@ async def earnings_transcript_for_quarter(request: EarningsTranscriptQuarterRequ
             detail="Transcript not available for this ticker, year, and quarter",
         )
     return dataclasses.asdict(transcript)
+
+
+@app.post("/earnings_transcripts/main_and_embed")
+async def earnings_transcripts_main_and_embed_endpoint(
+    request: EarningsTranscriptQuarterEmbedRequest,
+):
+    try:
+        return await earnings_transcripts_main_and_embed(
+            ticker=request.ticker,
+            year=request.year,
+            quarter=request.quarter,
+            force=request.force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/sec_main")

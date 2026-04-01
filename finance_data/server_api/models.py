@@ -33,6 +33,12 @@ class EarningsTranscriptQuarterRequest(BaseModel):
         return f"Q{quarter_label_to_num(value)}"
 
 
+class EarningsTranscriptQuarterEmbedRequest(EarningsTranscriptQuarterRequest):
+    """Request to download one earnings transcript and embed it."""
+
+    force: bool = False
+
+
 class SecMainToMarkdownRequest(BaseModel):
     """Request to download one SEC filing and convert it to markdown."""
 

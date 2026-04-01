@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 import asyncio
-
+import dataclasses
 import re
 from pathlib import Path
 from typing import Any
 
 from finance_data.filings.models import SecFilingType, SecResults
+from finance_data.earnings_transcripts.transcripts import (
+    get_transcript_for_quarter_async,
+    save_transcript_markdown,
+)
 from finance_data.filings.sec_data import (
     get_sec_results,
     save_sec_results_as_pdfs,
@@ -200,3 +204,36 @@ async def sec_main_to_markdown_and_embed(
         for k in embedded_keys
     ]
     return payload
+
+
+async def earnings_transcripts_main_and_embed(
+    ticker: str,
+    year: int | str,
+    quarter: str,
+    *,
+    force: bool = False,
+) -> dict:
+    """Fetch one earnings transcript to markdown, then embed it into ChromaDB."""
+    year_int = int(year)
+    transcript = await get_transcript_for_quarter_async(ticker, year_int, quarter)
+    if transcript is None:
+        raise ValueError(
+            f"No transcript available for ticker={ticker} year={year_int} quarter={quarter}"
+        )
+    markdown_path = save_transcript_markdown(transcript)
+    vector_store_cls = _load_vector_store_class()
+    vector_store = vector_store_cls()
+    embedded_keys = vector_store.from_earnings_transcript_markdown(
+        ticker=ticker,
+        year=str(year_int),
+        transcript_paths=[markdown_path],
+        force=force,
+    )
+    return {
+        "transcript": dataclasses.asdict(transcript),
+        "markdown_path": str(markdown_path),
+        "embedded": [
+            {"ticker": k.ticker, "year": k.year, "filing_type": k.filing_type}
+            for k in embedded_keys
+        ],
+    }
