@@ -600,6 +600,87 @@ async def _fetch_one_quarter(
     return None
 
 
+async def get_transcript_from_dcf_async(
+    ticker: str,
+    year: int,
+    quarter_num: int,
+) -> Transcript | None:
+    """Fetch transcript data from discountingcashflows.com for one quarter."""
+    dcf_url = _make_url(ticker, year, quarter_num)
+    logger.info(
+        "Pulling DCF transcript "
+        f"{ticker=} {year=} {quarter_num=} {dcf_url=}"
+    )
+
+    try:
+        await asyncio.to_thread(_probe_transcript_url, dcf_url)
+    except (TranscriptUrlDoesNotExistError, TranscriptSourceForbiddenError) as exc:
+        logger.warning(
+            "DCF transcript probe failed "
+            f"{ticker=} {year=} {quarter_num=} {exc=}"
+        )
+        return None
+
+    async with async_playwright() as playwright:
+        browser, context = await _new_browser_context(playwright)
+        try:
+            page = await context.new_page()
+            try:
+                transcript = await _load_transcript_discounting_cashflows_page(
+                    page=page,
+                    dcf_url=dcf_url,
+                    ticker=ticker,
+                    year=year,
+                    quarter_num=quarter_num,
+                )
+            finally:
+                await page.close()
+        except (PlaywrightTimeoutError, ValueError) as exc:
+            logger.warning(
+                "DCF transcript load failed "
+                f"{ticker=} {year=} {quarter_num=} {exc=}"
+            )
+            return None
+        finally:
+            await context.close()
+            await browser.close()
+
+    if transcript is None:
+        return None
+    save_transcript_markdown(transcript)
+    return transcript
+
+
+async def get_transcript_from_earnings_biz_async(
+    ticker: str,
+    year: int,
+    quarter_num: int,
+) -> Transcript | None:
+    """Fetch transcript data from earningscall.biz for one quarter."""
+    logger.info(
+        "Pulling earningscall.biz transcript "
+        f"{ticker=} {year=} {quarter_num=}"
+    )
+    async with async_playwright() as playwright:
+        browser, context = await _new_browser_context(playwright)
+        try:
+            return await _load_transcript_earningscall(
+                context=context,
+                ticker=ticker,
+                year=year,
+                quarter_num=quarter_num,
+            )
+        except (PlaywrightTimeoutError, ValueError) as exc:
+            logger.warning(
+                "earningscall.biz transcript load failed "
+                f"{ticker=} {year=} {quarter_num=} {exc=}"
+            )
+            return None
+        finally:
+            await context.close()
+            await browser.close()
+
+
 async def get_transcript_for_quarter_async(
     ticker: str,
     year: int,

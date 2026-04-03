@@ -6,8 +6,16 @@ from typing import Callable, Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from finance_data.earnings_transcripts.base import (
+    DCFDataPull,
+    EarningsBizDataPull,
+    TranscriptDataPuller,
+    TranscriptFallbackDataPull,
+)
 from finance_data.earnings_transcripts.transcripts import (
-    get_transcript_for_quarter_async,
+    get_transcript_from_dcf_async,
+    get_transcript_from_earnings_biz_async,
+    quarter_label_to_num,
     save_transcript_markdown,
 )
 from finance_data.dataloader.text_splitter import Chunk
@@ -50,6 +58,14 @@ def _get_vector_index() -> ChromaVectorStore:
     if _vector_index is None:
         _vector_index = ChromaVectorStore()
     return _vector_index
+
+
+def _build_transcript_data_puller() -> TranscriptDataPuller:
+    """Build transcript puller using earningscall.biz primary and DCF fallback."""
+    return TranscriptFallbackDataPull(
+        primary_pull=EarningsBizDataPull(get_transcript_from_earnings_biz_async),
+        fallback_pull=DCFDataPull(get_transcript_from_dcf_async),
+    )
 
 
 def _hybrid_search(
@@ -271,7 +287,13 @@ async def earnings_transcript_for_quarter_tool(
         year: Four-digit fiscal year.
         quarter: Fiscal quarter label ``Q1``, ``Q2``, ``Q3``, or ``Q4``.
     """
-    transcript = await get_transcript_for_quarter_async(ticker, year, quarter)
+    transcript_puller = _build_transcript_data_puller()
+    quarter_num = quarter_label_to_num(quarter)
+    transcript = await transcript_puller.pull_data_for_period(
+        ticker=ticker,
+        year=year,
+        quarter_num=quarter_num,
+    )
     if transcript is None:
         raise ValueError(
             f"No transcript available for ticker={ticker} year={year} {quarter}"
