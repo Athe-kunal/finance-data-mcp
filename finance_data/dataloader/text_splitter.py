@@ -19,7 +19,7 @@ _SEC_CHUNK_SIZE = 1024
 _SEC_CHUNK_OVERLAP = 128
 _EARNINGS_TRANSCRIPT_CHUNK_SIZE = 1024
 _EARNINGS_TRANSCRIPT_OVERLAP = 128
-_MIN_CHUNK_LENGTH = 100
+_MIN_CHUNK_LENGTH = 200
 
 
 @dataclass
@@ -90,7 +90,7 @@ def _last_line(text: str) -> str | None:
         return None
 
     last_newline = stripped.rfind("\n")
-    line = stripped[last_newline + 1:].strip()
+    line = stripped[last_newline + 1 :].strip()
     return line or None
 
 
@@ -113,7 +113,7 @@ def _merge_small_chunks(chunks: list[Chunk]) -> list[Chunk]:
     merged: list[Chunk] = list(chunks)
     i = 0
     while i < len(merged):
-        if len(merged[i].text) >= _MIN_CHUNK_LENGTH:
+        if alnum_length(merged[i].text) >= _MIN_CHUNK_LENGTH:
             i += 1
             continue
 
