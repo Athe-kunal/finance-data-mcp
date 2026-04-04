@@ -27,9 +27,9 @@ from finance_data.settings import sec_settings
 
 _vector_index: ChromaVectorStore | None = None
 _RESOURCE_HINT = (
-    "If the exact file is missing, generate and embed it with "
-    "`sec_main_to_markdown_and_embed_tool` (SEC filings) or "
-    "`earnings_transcript_for_quarter_tool` (transcripts + embeddings)."
+    "If the exact file is missing, use `search_sec_filings_tool` (SEC filings) or "
+    "`search_transcripts_tool` with a specific quarter (transcripts) — both tools "
+    "automatically fetch and embed data before searching."
 )
 
 
@@ -274,44 +274,6 @@ def company_name_to_ticker_tool(name: str) -> dict[str, str]:
     return {"ticker": ticker}
 
 
-@mcp.tool()
-async def earnings_transcript_for_quarter_tool(
-    ticker: str,
-    year: int,
-    quarter: Literal["Q1", "Q2", "Q3", "Q4"],
-) -> dict[str, object]:
-    """Fetch one earnings-call transcript, save markdown, and embed it.
-
-    Args:
-        ticker: Equity ticker symbol, for example ``"AMZN"``.
-        year: Four-digit fiscal year.
-        quarter: Fiscal quarter label ``Q1``, ``Q2``, ``Q3``, or ``Q4``.
-    """
-    transcript_puller = _build_transcript_data_puller()
-    quarter_num = quarter_label_to_num(quarter)
-    transcript = await transcript_puller.pull_data_for_period(
-        ticker=ticker,
-        year=year,
-        quarter_num=quarter_num,
-    )
-    if transcript is None:
-        raise ValueError(
-            f"No transcript available for ticker={ticker} year={year} {quarter}"
-        )
-    markdown_path = save_transcript_markdown(transcript)
-    embedded_keys = _get_vector_index().from_earnings_transcript_markdown(
-        ticker=ticker, year=str(year), transcript_paths=[markdown_path], force=False
-    )
-    return {
-        "ticker": ticker,
-        "year": year,
-        "quarter": quarter,
-        "markdown_path": str(markdown_path),
-        "embedded": [
-            {"ticker": key.ticker, "year": key.year, "filing_type": key.filing_type}
-            for key in embedded_keys
-        ],
-    }
 
 
 @mcp.tool()
@@ -322,71 +284,37 @@ def list_resources_tool() -> dict[str, object]:
     - SEC filings are discovered from ``settings.sec_data_dir`` and reported as PDFs.
     - Earnings transcripts are discovered from ``settings.earnings_transcripts_dir``
       and reported as markdown files.
-    - If a file is missing, use ``sec_main_to_markdown_and_embed_tool`` or
-      ``earnings_transcript_for_quarter_tool`` to generate + embed data.
+    - If a file is missing, use ``search_sec_filings_tool`` or
+      ``search_transcripts_tool`` (with a specific quarter) — both tools automatically
+      fetch and embed data before searching.
     """
     return _all_resources_payload()
 
 
 @mcp.tool()
-async def sec_main_to_markdown_and_embed_tool(
-    ticker: str,
-    year: str,
-    filing_type: str = "10-K",
-) -> dict:
-    """Download one SEC filing PDF (if needed), OCR to markdown (if needed), and embed markdown.
-
-    Args:
-        ticker: Equity ticker symbol, for example ``"GOOG"`` or ``"AMZN"``.
-        year: Filing year as a string (four digits), matching the SEC filing period.
-        filing_type: Form or period key to fetch, for example ``"10-K"`` or ``"10-Q1"``
-            through ``"10-Q3"`` for quarterly reports.
-    """
-    payload = await sec_main_to_markdown_and_embed(
-        ticker=ticker,
-        year=year,
-        filing_type=filing_type,
-        force=False,
-    )
-    sec_result = payload["sec_result"]
-    return {
-        "sec_result": {
-            "dashes_acc_num": sec_result.dashes_acc_num,
-            "form_name": sec_result.form_name,
-            "filing_date": sec_result.filing_date,
-            "report_date": sec_result.report_date,
-            "primary_document": sec_result.primary_document,
-        },
-        "pdf_path": str(payload["pdf_path"]),
-        "markdown_path": str(payload["markdown_path"]),
-        "embedded": payload["embedded"],
-    }
-
-
-@mcp.tool()
-def search_sec_filings_tool(
+async def search_sec_filings_tool(
     ticker: str,
     year: str,
     filing_type: str,
     query: str,
     top_k: int = 5,
 ) -> str:
-    """Run hybrid search over one indexed SEC filing.
-
-    **Prerequisite — data must be indexed before searching:**
-    Before calling this tool, verify the filing has been downloaded, OCR-ed, and
-    embedded. If the filing is missing or the search returns no results:
-      1. Call ``sec_main_to_markdown_and_embed_tool(ticker, year, filing_type)``
-         to download, OCR, and embed the filing.
-      2. Retry this search tool with the same arguments.
+    """Download, OCR, and embed one SEC filing (each step skipped if already done), then run hybrid search.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
-        year: Filing year.
-        filing_type: Indexed filing key, such as ``"10-K"`` or ``"10-Q1"``.
+        year: Filing year as a string (four digits), matching the SEC filing period.
+        filing_type: Form or period key, for example ``"10-K"`` or ``"10-Q1"``
+            through ``"10-Q3"`` for quarterly reports.
         query: Natural-language search query.
         top_k: Maximum number of chunks to return.
     """
+    await sec_main_to_markdown_and_embed(
+        ticker=ticker,
+        year=year,
+        filing_type=filing_type,
+        force=False,
+    )
     results = _hybrid_search(
         _get_vector_index(),
         ticker=ticker,
@@ -399,33 +327,47 @@ def search_sec_filings_tool(
 
 
 @mcp.tool()
-def search_transcripts_tool(
+async def search_transcripts_tool(
     ticker: str,
-    year: str,
+    year: int,
     query: str,
     top_k: int = 5,
     quarter: Literal["Q1", "Q2", "Q3", "Q4"] | None = None,
 ) -> str:
-    """Run hybrid search over indexed transcript chunks.
+    """Fetch, save, and embed one earnings transcript (each step skipped if already done), then run hybrid search.
 
-    **Prerequisite — transcripts must be indexed before searching:**
-    Before calling this tool, verify that at least one quarterly transcript for the
-    given ticker and year has been fetched and embedded. If no transcripts are indexed
-    or the search returns no results:
-      1. Call ``earnings_transcript_for_quarter_tool(ticker, year, quarter)`` for each
-         quarter of interest (Q1 through Q4) to fetch, save, and embed transcripts.
-      2. Retry this search tool with the same arguments.
+    If ``quarter`` is provided, the transcript for that quarter is fetched and embedded
+    before searching. If omitted, the search runs across all already-indexed quarters
+    for the given ticker and year.
 
     Args:
         ticker: Equity ticker symbol, for example ``"AMZN"``.
-        year: Transcript year.
+        year: Four-digit fiscal year.
         query: Natural-language search query.
         top_k: Maximum number of chunks to return after quarter-level merging.
-        quarter: If set, search only that quarter (``Q1``–``Q4``). If omitted, merge
-            hits across all indexed quarters for the year (same as the HTTP API).
+        quarter: If set, fetch+embed that quarter (``Q1``–``Q4``) then search only it.
+            If omitted, merge hits across all indexed quarters for the year.
     """
     year_s = str(year).strip()
     vector_index = _get_vector_index()
+
+    if quarter is not None:
+        transcript_puller = _build_transcript_data_puller()
+        quarter_num = quarter_label_to_num(quarter)
+        transcript = await transcript_puller.pull_data_for_period(
+            ticker=ticker,
+            year=year,
+            quarter_num=quarter_num,
+        )
+        if transcript is None:
+            raise ValueError(
+                f"No transcript available for ticker={ticker} year={year} {quarter}"
+            )
+        markdown_path = save_transcript_markdown(transcript)
+        vector_index.from_earnings_transcript_markdown(
+            ticker=ticker, year=year_s, transcript_paths=[markdown_path], force=False
+        )
+
     merged = _search_transcripts_common(
         vector_index,
         ticker=ticker,
