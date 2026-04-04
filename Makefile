@@ -56,6 +56,30 @@ vllm-reranker-serve:
 start-server:
 	uv run uvicorn server:app --host 0.0.0.0 --reload --port $(API_PORT)
 
+.PHONY: vllm-reranker-serve
+vllm-reranker-serve:
+	uv run vllm serve $(RERANKER_MODEL) \
+		--gpu-memory-utilization $(RERANKER_GPU_MEMORY_UTILIZATION) \
+		--hf-overrides '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}' \
+		--port $(RERANKER_PORT) \
+		--host $(SERVER)
+
+.PHONY: run-ocr
+run-ocr:
+	nohup $(MAKE) vllm-olmocr-serve >> olmocr.log 2>&1 &
+
+.PHONY: run-embd
+run-embd:
+	nohup $(MAKE) vllm-embd-serve >> embd.log 2>&1 &
+
+.PHONY: run-server
+run-server:
+	nohup $(MAKE) start-server >> server.log 2>&1 &
+
+.PHONY: run-reranker
+run-reranker:
+	nohup $(MAKE) vllm-reranker-serve >> reranker.log 2>&1 &
+
 .PHONY: guidellm-benchmark
 guidellm-benchmark:
 	uv run guidellm benchmark \
