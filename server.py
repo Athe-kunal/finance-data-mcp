@@ -6,8 +6,16 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
 
+from finance_data.earnings_transcripts.base import (
+    DCFDataPull,
+    EarningsBizDataPull,
+    TranscriptDataPuller,
+    TranscriptFallbackDataPull,
+)
 from finance_data.earnings_transcripts.transcripts import (
-    get_transcript_for_quarter_async,
+    get_transcript_from_dcf_async,
+    get_transcript_from_earnings_biz_async,
+    quarter_label_to_num,
 )
 from finance_data.dataloader.pipeline import (
     earnings_transcripts_main_and_embed,
@@ -46,6 +54,14 @@ from finance_data.server_api.models import (
 from finance_data.settings import sec_settings
 
 vector_index: Any | None = None
+
+
+def _build_transcript_data_puller() -> TranscriptDataPuller:
+    """Build transcript puller using earningscall.biz primary and DCF fallback."""
+    return TranscriptFallbackDataPull(
+        primary_pull=EarningsBizDataPull(get_transcript_from_earnings_biz_async),
+        fallback_pull=DCFDataPull(get_transcript_from_dcf_async),
+    )
 
 
 def _load_vector_store_class() -> Any:
@@ -179,8 +195,12 @@ def company_name_to_ticker(request: CompanyNameRequest):
 
 @app.post("/earnings_transcripts/for_quarter")
 async def earnings_transcript_for_quarter(request: EarningsTranscriptQuarterRequest):
-    transcript = await get_transcript_for_quarter_async(
-        request.ticker, request.year, request.quarter
+    transcript_puller = _build_transcript_data_puller()
+    quarter_num = quarter_label_to_num(request.quarter)
+    transcript = await transcript_puller.pull_data_for_period(
+        ticker=request.ticker,
+        year=request.year,
+        quarter_num=quarter_num,
     )
     if transcript is None:
         raise HTTPException(

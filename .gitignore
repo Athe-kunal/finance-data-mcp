@@ -219,3 +219,5 @@ faiss_indexes/
 earnings_transcripts_data/
 
 chroma_db/
+
+*.log
