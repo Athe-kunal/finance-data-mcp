@@ -1,6 +1,6 @@
 [project]
 name = "finance_data_llm"
-version = "0.1.9"
+version = "0.1.10"
 description = "SEC filings and Earnings call transcripts data"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
