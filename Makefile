@@ -118,3 +118,7 @@ lint:
 lint-check:
 	uv run --group dev black --check .
 	uv run --group dev --group ocr-md --group mcp ty check .
+
+.PHONY: build-cache
+build-cache:
+	uv run python -c "from finance_data.common.processed_data_index import rebuild_processed_data_cache; rebuild_processed_data_cache()"

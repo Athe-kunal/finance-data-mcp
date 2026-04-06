@@ -48,6 +48,7 @@ class SECSettings(BaseSettings):
     # Processed-data index scanning.
     processed_index_max_workers: int = 8
     ignore_ocr: bool = False
+    processed_index_cache_file: str = "processed_data_index_cache.orjson"
 
     # Batch endpoint backpressure.
     batch_max_concurrent_jobs: int = 8
