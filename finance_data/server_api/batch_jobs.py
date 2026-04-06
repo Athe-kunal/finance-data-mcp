@@ -3,7 +3,7 @@
 import asyncio
 import dataclasses
 from collections.abc import Awaitable, Iterable
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 from finance_data.common import processed_data_index
 from finance_data.earnings_transcripts.transcripts import (
@@ -17,6 +17,23 @@ from finance_data.server_api.models import (
 )
 
 _T = TypeVar("_T")
+
+
+class _SecBatchJob(NamedTuple):
+    """Normalized SEC batch job payload."""
+
+    ticker: str
+    year: str
+    filing_type: str
+    force: bool
+
+
+class _TranscriptBatchJob(NamedTuple):
+    """Normalized earnings transcript batch job payload."""
+
+    ticker: str
+    year: int
+    quarter: str
 
 
 def serialize_sec_result(sec_result: SecResults) -> dict[str, str]:
@@ -91,9 +108,9 @@ async def run_earnings_transcript_job(
 
 def expand_sec_batch_jobs(
     requests: list[BatchSecFilingItem],
-) -> list[tuple[str, str, str, bool]]:
+) -> list[_SecBatchJob]:
     """Build SEC jobs as ticker/year/filing_type/force tuples."""
-    jobs: list[tuple[str, str, str, bool]] = []
+    jobs: list[_SecBatchJob] = []
     for item in requests:
         for filing_type in item.filing_types:
             filing_key = filing_type.strip().upper()
@@ -103,15 +120,22 @@ def expand_sec_batch_jobs(
                 filing_key,
             ):
                 continue
-            jobs.append((item.ticker, item.year, filing_type, item.force))
+            jobs.append(
+                _SecBatchJob(
+                    ticker=item.ticker,
+                    year=item.year,
+                    filing_type=filing_type,
+                    force=item.force,
+                )
+            )
     return jobs
 
 
 def expand_earnings_batch_jobs(
     requests: list[BatchEarningsTranscriptItem],
-) -> list[tuple[str, int, str]]:
+) -> list[_TranscriptBatchJob]:
     """Build transcript jobs as ticker/year/quarter tuples."""
-    jobs: list[tuple[str, int, str]] = []
+    jobs: list[_TranscriptBatchJob] = []
     for item in requests:
         for year in item.years:
             for quarter in item.quarters:
@@ -122,7 +146,13 @@ def expand_earnings_batch_jobs(
                     quarter_key,
                 ):
                     continue
-                jobs.append((item.ticker, year, quarter))
+                jobs.append(
+                    _TranscriptBatchJob(
+                        ticker=item.ticker,
+                        year=year,
+                        quarter=quarter,
+                    )
+                )
     return jobs
 
 
