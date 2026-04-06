@@ -266,6 +266,27 @@ async def sec_main_to_markdown(
     filing_type: SecFilingType | str = SecFilingType.FORM_10_K,
 ) -> dict[str, Any]:
     """Ensure one SEC filing is downloaded and OCR markdown exists, then return markdown."""
+    filing_type_str = _normalize_filing_type(filing_type)
+
+    if processed_data_index.has_sec_filing(ticker, year, filing_type_str):
+        local_pdf = _find_local_pdf_for_filing_type(ticker, year, filing_type)
+        if local_pdf is not None:
+            markdown_path = sec_markdown_path_for_pdf(local_pdf)
+            if markdown_path.exists():
+                logger.info(
+                    f"Cache hit. Loading SEC markdown from disk. "
+                    f"{ticker=} {year=} {filing_type_str=} {markdown_path=}"
+                )
+                return {
+                    "sec_result": _build_local_sec_result(local_pdf),
+                    "pdf_path": local_pdf,
+                    "markdown_path": markdown_path,
+                    "markdown_text": markdown_path.read_text(encoding="utf-8"),
+                }
+        logger.warning(
+            f"Cache hit but markdown file missing on disk. "
+            f"{ticker=} {year=} {filing_type_str=}"
+        )
 
     sec_result, pdf_path = await sec_main(
         ticker=ticker,

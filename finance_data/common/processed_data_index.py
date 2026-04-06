@@ -60,6 +60,9 @@ class _ProcessedDataEventHandler(FileSystemEventHandler):
         self._index.handle_filesystem_event(Path(event.src_path))
 
     def on_deleted(self, event: FileDeletedEvent) -> None:
+        if event.is_directory:
+            self._index.refresh()
+            return
         self._index.handle_filesystem_event(Path(event.src_path), is_deleted=True)
 
     def on_moved(self, event: FileMovedEvent) -> None:
@@ -78,6 +81,7 @@ class ProcessedDataIndex:
         max_workers: int,
         ignore_ocr: bool,
         cache_file: str,
+        start_watcher: bool = True,
     ) -> None:
         self._sec_data_dir = Path(sec_data_dir)
         self._sec_markdown_dir = Path(sec_markdown_dir)
@@ -94,7 +98,10 @@ class ProcessedDataIndex:
             transcript_quarters=frozenset(),
         )
         self._load_or_refresh_cache()
-        self._start_watcher()
+        if start_watcher:
+            self._start_watcher()
+        else:
+            logger.info(f"Watcher disabled. {start_watcher=}")
 
     def _load_or_refresh_cache(self) -> None:
         cache_loaded = self._load_cache_from_file()
@@ -123,8 +130,9 @@ class ProcessedDataIndex:
         return True
 
     def refresh(self) -> None:
-        """Rebuild indexes from disk and persist on-disk cache."""
+        """Rebuild indexes from disk, purge stale entries, and persist cache."""
         entries = self._build_entries_from_disk()
+        entries = self._purge_stale_entries(entries)
         snapshot = self._snapshot_from_entries(entries)
         with self._lock:
             self._cache_entries = entries
@@ -202,6 +210,8 @@ class ProcessedDataIndex:
             )
 
     def _scan_sec_markdown_to_entries(self, entries: dict[str, CacheEntry]) -> None:
+        if self._ignore_ocr:
+            return
         for markdown_path in self._sec_markdown_dir.glob("*/*.md"):
             parsed = self._parse_sec_markdown_path(markdown_path)
             if parsed is None:
@@ -262,6 +272,46 @@ class ProcessedDataIndex:
         if not ticker or not year or not filing_type:
             return None
         return ProcessedDataKey(ticker=ticker, year=year, item=filing_type)
+
+    def _path_for_cache_entry(self, key: str, entry: CacheEntry) -> Path | None:
+        try:
+            parsed = _parse_key(key)
+        except ValueError:
+            return None
+        if entry.entry_type == "sec_filings":
+            return (
+                self._sec_data_dir
+                / f"{parsed.ticker}-{parsed.year}"
+                / f"{parsed.item}.pdf"
+            )
+        if entry.entry_type == "sec_markdown_filings":
+            return (
+                self._sec_markdown_dir
+                / f"{parsed.ticker}-{parsed.year}"
+                / f"{parsed.item}.md"
+            )
+        if entry.entry_type == "earnings_data":
+            return (
+                self._transcripts_dir
+                / parsed.ticker
+                / parsed.year
+                / f"{parsed.item}.md"
+            )
+        return None
+
+    def _purge_stale_entries(
+        self,
+        entries: dict[str, CacheEntry],
+    ) -> dict[str, CacheEntry]:
+        valid: dict[str, CacheEntry] = {}
+        for key, entry in entries.items():
+            path = self._path_for_cache_entry(key, entry)
+            if path is None or path.exists():
+                valid[key] = entry
+        stale_count = len(entries) - len(valid)
+        if stale_count:
+            logger.info(f"Purged stale cache entries. {stale_count=}")
+        return valid
 
     def _snapshot_from_entries(
         self,
@@ -330,7 +380,8 @@ class ProcessedDataIndex:
         handler = _ProcessedDataEventHandler(index=self)
         observer = Observer()
         self._schedule_if_exists(observer, self._sec_data_dir, handler)
-        self._schedule_if_exists(observer, self._sec_markdown_dir, handler)
+        if not self._ignore_ocr:
+            self._schedule_if_exists(observer, self._sec_markdown_dir, handler)
         self._schedule_if_exists(observer, self._transcripts_dir, handler)
         observer.daemon = True
         observer.start()
@@ -343,9 +394,7 @@ class ProcessedDataIndex:
         target_dir: Path,
         handler: _ProcessedDataEventHandler,
     ) -> None:
-        if not target_dir.exists():
-            logger.info(f"Skipping watcher for missing path. {target_dir=}")
-            return
+        target_dir.mkdir(parents=True, exist_ok=True)
         observer.schedule(handler, target_dir.as_posix(), recursive=True)
         logger.info(f"Watcher scheduled. {target_dir=}")
 
@@ -374,7 +423,11 @@ class ProcessedDataIndex:
             mtime = 0 if is_deleted else self._safe_mtime(path)
             key = _sec_cache_key(parsed.ticker, parsed.year, parsed.item)
             return _CacheUpdate(key=key, entry_type="sec_filings", mtime=mtime)
-        if self._is_path_under(path, self._sec_markdown_dir) and path.suffix.lower() == ".md":
+        if (
+            not self._ignore_ocr
+            and self._is_path_under(path, self._sec_markdown_dir)
+            and path.suffix.lower() == ".md"
+        ):
             parsed = self._parse_sec_markdown_path(path)
             if parsed is None:
                 return None
@@ -476,6 +529,7 @@ processed_data_index = ProcessedDataIndex(
     max_workers=sec_settings.processed_index_max_workers,
     ignore_ocr=sec_settings.ignore_ocr,
     cache_file=sec_settings.processed_index_cache_file,
+    start_watcher=sec_settings.processed_index_start_watcher,
 )
 
 

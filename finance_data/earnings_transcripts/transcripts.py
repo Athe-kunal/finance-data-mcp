@@ -608,16 +608,14 @@ async def get_transcript_from_dcf_async(
     """Fetch transcript data from discountingcashflows.com for one quarter."""
     dcf_url = _make_url(ticker, year, quarter_num)
     logger.info(
-        "Pulling DCF transcript "
-        f"{ticker=} {year=} {quarter_num=} {dcf_url=}"
+        "Pulling DCF transcript " f"{ticker=} {year=} {quarter_num=} {dcf_url=}"
     )
 
     try:
         await asyncio.to_thread(_probe_transcript_url, dcf_url)
     except (TranscriptUrlDoesNotExistError, TranscriptSourceForbiddenError) as exc:
         logger.warning(
-            "DCF transcript probe failed "
-            f"{ticker=} {year=} {quarter_num=} {exc=}"
+            "DCF transcript probe failed " f"{ticker=} {year=} {quarter_num=} {exc=}"
         )
         return None
 
@@ -637,8 +635,7 @@ async def get_transcript_from_dcf_async(
                 await page.close()
         except (PlaywrightTimeoutError, ValueError) as exc:
             logger.warning(
-                "DCF transcript load failed "
-                f"{ticker=} {year=} {quarter_num=} {exc=}"
+                "DCF transcript load failed " f"{ticker=} {year=} {quarter_num=} {exc=}"
             )
             return None
         finally:
@@ -658,8 +655,7 @@ async def get_transcript_from_earnings_biz_async(
 ) -> Transcript | None:
     """Fetch transcript data from earningscall.biz for one quarter."""
     logger.info(
-        "Pulling earningscall.biz transcript "
-        f"{ticker=} {year=} {quarter_num=}"
+        "Pulling earningscall.biz transcript " f"{ticker=} {year=} {quarter_num=}"
     )
     async with async_playwright() as playwright:
         browser, context = await _new_browser_context(playwright)
@@ -681,6 +677,17 @@ async def get_transcript_from_earnings_biz_async(
             await browser.close()
 
 
+def _find_transcript_path(ticker: str, year: int, quarter_num: int) -> Path | None:
+    """Return the first matching transcript markdown file on disk, or None."""
+    transcript_dir = (
+        Path(sec_settings.earnings_transcripts_dir)
+        / ticker
+        / str(year)
+    )
+    candidates = sorted(transcript_dir.glob(f"Q{quarter_num}*.md"))
+    return candidates[0] if candidates else None
+
+
 async def get_transcript_for_quarter_async(
     ticker: str,
     year: int,
@@ -692,6 +699,21 @@ async def get_transcript_for_quarter_async(
     (case-insensitive; optional spaces after ``Q``).
     """
     quarter_num = quarter_label_to_num(quarter)
+    quarter_label = f"Q{quarter_num}"
+
+    if processed_data_index.has_transcript(ticker, str(year), quarter_label):
+        path = _find_transcript_path(ticker, year, quarter_num)
+        if path is not None:
+            logger.info(
+                f"Cache hit. Loading transcript from disk. "
+                f"{ticker=} {year=} {quarter_label=} {path=}"
+            )
+            return Transcript.from_markdown(path)
+        logger.warning(
+            f"Cache hit but transcript file missing on disk. "
+            f"{ticker=} {year=} {quarter_label=}"
+        )
+
     async with async_playwright() as playwright:
         browser, context = await _new_browser_context(playwright)
         try:
@@ -714,14 +736,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "ticker",
         nargs="?",
-        default="AAPL",
+        default="CSCO",
         help="Stock ticker symbol (default: %(default)s)",
     )
     parser.add_argument(
         "year",
         nargs="?",
         type=int,
-        default=datetime.datetime.now().year,
+        # default=datetime.datetime.now().year,
+        default=2023,
         help="Fiscal year (default: current year - 1)",
     )
     parser.add_argument(

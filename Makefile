@@ -54,7 +54,7 @@ vllm-reranker-serve:
 
 .PHONY: start-server
 start-server:
-	uv run uvicorn server:app --host 0.0.0.0 --reload --port $(API_PORT)
+	PROCESSED_INDEX_START_WATCHER=true uv run uvicorn server:app --host 0.0.0.0 --reload --port $(API_PORT)
 
 .PHONY: run-ocr
 run-ocr:

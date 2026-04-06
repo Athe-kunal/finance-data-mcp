@@ -1,1 +1,307 @@
-{}
+{
+  "AAPL|2020|10-K": {
+    "exists": true,
+    "mtime": 1774092769,
+    "type": "sec_filings"
+  },
+  "AAPL|2020|10-Q1": {
+    "exists": true,
+    "mtime": 1774092768,
+    "type": "sec_filings"
+  },
+  "AAPL|2020|10-Q2": {
+    "exists": true,
+    "mtime": 1774092768,
+    "type": "sec_filings"
+  },
+  "AAPL|2020|10-Q4": {
+    "exists": true,
+    "mtime": 1774092768,
+    "type": "sec_filings"
+  },
+  "AAPL|2021|10-K": {
+    "exists": true,
+    "mtime": 1773536756,
+    "type": "sec_filings"
+  },
+  "AAPL|2021|10-Q1": {
+    "exists": true,
+    "mtime": 1773536756,
+    "type": "sec_filings"
+  },
+  "AAPL|2021|10-Q2": {
+    "exists": true,
+    "mtime": 1773536756,
+    "type": "sec_filings"
+  },
+  "AAPL|2021|10-Q4": {
+    "exists": true,
+    "mtime": 1773536755,
+    "type": "sec_filings"
+  },
+  "AAPL|2022|10-K": {
+    "exists": true,
+    "mtime": 1773520829,
+    "type": "sec_markdown_filings"
+  },
+  "AAPL|2022|10-Q1": {
+    "exists": true,
+    "mtime": 1773520829,
+    "type": "sec_markdown_filings"
+  },
+  "AAPL|2022|10-Q2": {
+    "exists": true,
+    "mtime": 1773520829,
+    "type": "sec_markdown_filings"
+  },
+  "AAPL|2022|10-Q4": {
+    "exists": true,
+    "mtime": 1773520829,
+    "type": "sec_markdown_filings"
+  },
+  "AAPL|2023|10-K": {
+    "exists": true,
+    "mtime": 1775028970,
+    "type": "sec_filings"
+  },
+  "AAPL|2024|10-K": {
+    "exists": true,
+    "mtime": 1773475837,
+    "type": "sec_markdown_filings"
+  },
+  "AAPL|2024|10-Q1": {
+    "exists": true,
+    "mtime": 1773475837,
+    "type": "sec_markdown_filings"
+  },
+  "AAPL|2024|10-Q2": {
+    "exists": true,
+    "mtime": 1773475837,
+    "type": "sec_markdown_filings"
+  },
+  "AAPL|2024|10-Q4": {
+    "exists": true,
+    "mtime": 1773475837,
+    "type": "sec_markdown_filings"
+  },
+  "AAPL|2025|10-K": {
+    "exists": true,
+    "mtime": 1773456001,
+    "type": "sec_filings"
+  },
+  "AAPL|2025|10-Q1": {
+    "exists": true,
+    "mtime": 1773455996,
+    "type": "sec_filings"
+  },
+  "AAPL|2025|10-Q2": {
+    "exists": true,
+    "mtime": 1773455996,
+    "type": "sec_filings"
+  },
+  "AAPL|2025|10-Q4": {
+    "exists": true,
+    "mtime": 1773455993,
+    "type": "sec_filings"
+  },
+  "AAPL|2026|DEF 14A": {
+    "exists": true,
+    "mtime": 1774822456,
+    "type": "sec_filings"
+  },
+  "AMZN|2023|10-Q1": {
+    "exists": true,
+    "mtime": 1774820197,
+    "type": "sec_filings"
+  },
+  "AMZN|2023|8-K": {
+    "exists": true,
+    "mtime": 1774807870,
+    "type": "sec_filings"
+  },
+  "AMZN|2025|10-K": {
+    "exists": true,
+    "mtime": 1773457515,
+    "type": "sec_markdown_filings"
+  },
+  "AMZN|2025|10-Q1": {
+    "exists": true,
+    "mtime": 1773457515,
+    "type": "sec_markdown_filings"
+  },
+  "AMZN|2025|10-Q2": {
+    "exists": true,
+    "mtime": 1773457515,
+    "type": "sec_markdown_filings"
+  },
+  "AMZN|2025|10-Q3": {
+    "exists": true,
+    "mtime": 1773457515,
+    "type": "sec_markdown_filings"
+  },
+  "CSCO|2024|10-K": {
+    "exists": true,
+    "mtime": 1773470467,
+    "type": "sec_markdown_filings"
+  },
+  "CSCO|2024|10-Q1": {
+    "exists": true,
+    "mtime": 1773470467,
+    "type": "sec_markdown_filings"
+  },
+  "CSCO|2024|10-Q2": {
+    "exists": true,
+    "mtime": 1773470467,
+    "type": "sec_markdown_filings"
+  },
+  "CSCO|2024|10-Q4": {
+    "exists": true,
+    "mtime": 1773470467,
+    "type": "sec_markdown_filings"
+  },
+  "GOOG|2022|10-K": {
+    "exists": true,
+    "mtime": 1773474682,
+    "type": "sec_filings"
+  },
+  "GOOG|2022|10-Q3": {
+    "exists": true,
+    "mtime": 1773474682,
+    "type": "sec_filings"
+  },
+  "GOOG|2023|10-K": {
+    "exists": true,
+    "mtime": 1774220817,
+    "type": "sec_filings"
+  },
+  "GOOG|2023|10-Q1": {
+    "exists": true,
+    "mtime": 1774220817,
+    "type": "sec_filings"
+  },
+  "GOOG|2023|10-Q2": {
+    "exists": true,
+    "mtime": 1774220817,
+    "type": "sec_filings"
+  },
+  "GOOG|2023|10-Q3": {
+    "exists": true,
+    "mtime": 1774220817,
+    "type": "sec_filings"
+  },
+  "GOOG|2024|10-K": {
+    "exists": true,
+    "mtime": 1774218633,
+    "type": "sec_filings"
+  },
+  "GOOG|2024|10-Q1": {
+    "exists": true,
+    "mtime": 1774218633,
+    "type": "sec_filings"
+  },
+  "GOOG|2024|10-Q2": {
+    "exists": true,
+    "mtime": 1774218633,
+    "type": "sec_filings"
+  },
+  "GOOG|2024|10-Q3": {
+    "exists": true,
+    "mtime": 1774218633,
+    "type": "sec_filings"
+  },
+  "GOOG|2025|10-K": {
+    "exists": true,
+    "mtime": 1774238924,
+    "type": "sec_markdown_filings"
+  },
+  "GOOG|2025|10-Q1": {
+    "exists": true,
+    "mtime": 1774238924,
+    "type": "sec_markdown_filings"
+  },
+  "GOOG|2025|10-Q2": {
+    "exists": true,
+    "mtime": 1774238924,
+    "type": "sec_markdown_filings"
+  },
+  "GOOG|2025|10-Q3": {
+    "exists": true,
+    "mtime": 1774238924,
+    "type": "sec_markdown_filings"
+  },
+  "LVS|2022|10-K": {
+    "exists": true,
+    "mtime": 1774985079,
+    "type": "sec_filings"
+  },
+  "LVS|2023|10-K": {
+    "exists": true,
+    "mtime": 1774997118,
+    "type": "sec_filings"
+  },
+  "LVS|2024|10-K": {
+    "exists": true,
+    "mtime": 1774997133,
+    "type": "sec_filings"
+  },
+  "LVS|2025|10-Q2": {
+    "exists": true,
+    "mtime": 1774823558,
+    "type": "sec_filings"
+  },
+  "LVS|2025|DEF 14A": {
+    "exists": true,
+    "mtime": 1774823579,
+    "type": "sec_filings"
+  },
+  "NVDA|2023|10-K": {
+    "exists": true,
+    "mtime": 1774234954,
+    "type": "sec_markdown_filings"
+  },
+  "NVDA|2024|10-K": {
+    "exists": true,
+    "mtime": 1773468802,
+    "type": "sec_filings"
+  },
+  "NVDA|2024|10-Q2": {
+    "exists": true,
+    "mtime": 1773468801,
+    "type": "sec_filings"
+  },
+  "NVDA|2024|10-Q3": {
+    "exists": true,
+    "mtime": 1773468801,
+    "type": "sec_filings"
+  },
+  "NVDA|2024|10-Q4": {
+    "exists": true,
+    "mtime": 1773468801,
+    "type": "sec_filings"
+  },
+  "NVDA|2025|10-K": {
+    "exists": true,
+    "mtime": 1774237043,
+    "type": "sec_markdown_filings"
+  },
+  "NVDA|2025|10-Q2": {
+    "exists": true,
+    "mtime": 1774237043,
+    "type": "sec_markdown_filings"
+  },
+  "NVDA|2025|10-Q3": {
+    "exists": true,
+    "mtime": 1774237043,
+    "type": "sec_markdown_filings"
+  },
+  "NVDA|2025|10-Q4": {
+    "exists": true,
+    "mtime": 1774237043,
+    "type": "sec_markdown_filings"
+  },
+  "YUM|2025|10-K": {
+    "exists": true,
+    "mtime": 1774827182,
+    "type": "sec_markdown_filings"
+  }
+}

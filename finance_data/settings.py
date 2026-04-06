@@ -14,9 +14,8 @@ class SECSettings(BaseSettings):
     olmocr_model: str = "allenai/olmOCR-2-7B-1025-FP8"
     olmocr_workspace: str = "./localworkspace"
 
-    # Downloaded SEC PDFs and sec_results.json: {sec_data_dir}/{ticker}-{year}/
+    # Downloaded SEC PDFs: {sec_data_dir}/{ticker}-{year}/
     sec_data_dir: str = "sec_data"
-    sec_metadata_filename: str = "sec_results.json"
 
     earnings_transcripts_dir: str = "earnings_transcripts_data"
     # Embedding server (vLLM pooling runner)
@@ -49,6 +48,8 @@ class SECSettings(BaseSettings):
     processed_index_max_workers: int = 8
     ignore_ocr: bool = False
     processed_index_cache_file: str = "processed_data_index_cache.orjson"
+    # Set to False for short-lived scripts to skip the background watcher thread.
+    processed_index_start_watcher: bool = False
 
     # Batch endpoint backpressure.
     batch_max_concurrent_jobs: int = 8
