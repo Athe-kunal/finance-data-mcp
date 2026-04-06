@@ -24,7 +24,8 @@ _EMBED_BATCH_SIZE = 2048
 _CHROMA_MISSING_PAGE_NUM = -1
 _BM25_K1 = 1.2  # term-frequency saturation
 _BM25_B = 0.75  # length normalisation (0 = none, 1 = full)
-
+CHUNK_SIZE = 2048
+CHUNK_OVERLAP = 256
 
 # ---------------------------------------------------------------------------
 # BM25 helpers (rank_bm25)
@@ -238,8 +239,8 @@ class ChromaVectorStore:
     def _chunk_transcript_markdown(
         markdown_text: str,
         *,
-        chunk_size: int = 2048,
-        overlap: int = 256,
+        chunk_size: int = CHUNK_SIZE,
+        overlap: int = CHUNK_OVERLAP,
     ) -> list[Chunk]:
         speaker_sections = re.findall(
             r"<speaker-start>[\s\S]*?<speaker-end>",
@@ -449,6 +450,8 @@ class ChromaVectorStore:
         filing_type: str,
         markdown_path: str | Path,
         filing_date: str | None = None,
+        chunk_size: int = CHUNK_SIZE,
+        overlap: int = CHUNK_OVERLAP,
         force: bool = False,
     ) -> list[IndexKey]:
         """Index a single SEC filing markdown file into ChromaDB.
@@ -475,7 +478,7 @@ class ChromaVectorStore:
         _log.info(f"Indexing SEC filing {ticker=} {year=} {filing_type=} {md_path=}")
 
         markdown_text = md_path.read_text(encoding="utf-8")
-        chunks = chunk_markdown(markdown_text)
+        chunks = chunk_markdown(markdown_text, chunk_size=chunk_size, overlap=overlap)
         embedded = self._embed_for_upsert(chunks)
 
         self._upsert_document_chunks(
@@ -500,8 +503,8 @@ class ChromaVectorStore:
         transcript_paths: Sequence[Path] | None = None,
         *,
         force: bool = False,
-        chunk_size: int = 2048,
-        overlap: int = 256,
+        chunk_size: int = CHUNK_SIZE,
+        overlap: int = CHUNK_OVERLAP,
     ) -> list[IndexKey]:
         ingested: list[IndexKey] = []
         resolved_paths = self._resolve_transcript_paths(ticker, year, transcript_paths)
