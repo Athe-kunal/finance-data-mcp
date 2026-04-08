@@ -14,12 +14,32 @@ _SECTION_TITLE_RE = re.compile(
     r"^(Item\s+\d+[A-C]?\..*|Part\s+[IV]+.*)",
     re.MULTILINE | re.IGNORECASE,
 )
+_MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", re.MULTILINE)
 _OPERATOR_SPEAKER_RE = re.compile(r"\boperator\b", re.IGNORECASE)
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(])")
+_ABBREVIATIONS = {
+    "mr.",
+    "mrs.",
+    "ms.",
+    "dr.",
+    "prof.",
+    "sr.",
+    "jr.",
+    "inc.",
+    "corp.",
+    "co.",
+    "ltd.",
+    "u.s.",
+    "e.g.",
+    "i.e.",
+    "etc.",
+}
+_ABBREVIATION_PERIOD_TOKEN = "<ABBR_DOT>"
 
 _SEC_CHUNK_SIZE = 1024
-_SEC_CHUNK_OVERLAP = 128
+_SEC_CHUNK_OVERLAP = 256
 _EARNINGS_TRANSCRIPT_CHUNK_SIZE = 1024
-_EARNINGS_TRANSCRIPT_OVERLAP = 128
+_EARNINGS_TRANSCRIPT_OVERLAP = 256
 _MIN_CHUNK_LENGTH = 200
 
 
@@ -35,6 +55,12 @@ class Chunk:
 
 
 def _extract_section(text: str, current_section: str | None) -> str | None:
+    heading_match = _MARKDOWN_HEADING_RE.search(text)
+    if heading_match:
+        heading_text = heading_match.group(1).strip()
+        if heading_text:
+            return heading_text
+
     title_match = _SECTION_TITLE_RE.search(text)
     if title_match:
         return title_match.group(0).strip()
@@ -148,6 +174,147 @@ def _merge_small_chunks(chunks: list[Chunk]) -> list[Chunk]:
     return merged
 
 
+def _split_into_sentences(text: str) -> list[str]:
+    """Split text into sentence-like segments while preserving punctuation."""
+    compact = re.sub(r"\s+", " ", text).strip()
+    if not compact:
+        return []
+
+    protected_text = _protect_abbreviation_periods(compact)
+    parts = _SENTENCE_BOUNDARY_RE.split(protected_text)
+    restored_parts = [_restore_abbreviation_periods(part) for part in parts]
+    return [part.strip() for part in restored_parts if part.strip()]
+
+
+def _protect_abbreviation_periods(text: str) -> str:
+    protected = text
+    for abbreviation in _ABBREVIATIONS:
+        replacement = abbreviation.replace(".", _ABBREVIATION_PERIOD_TOKEN)
+        pattern = re.compile(rf"\b{re.escape(abbreviation)}", re.IGNORECASE)
+        protected = pattern.sub(replacement, protected)
+    return protected
+
+
+def _restore_abbreviation_periods(text: str) -> str:
+    return text.replace(_ABBREVIATION_PERIOD_TOKEN, ".")
+
+
+def _trim_sentence_list_by_overlap(
+    sentences: list[str], overlap: int
+) -> list[str]:
+    """Keep trailing sentences whose cumulative length does not exceed overlap."""
+    if overlap <= 0:
+        return []
+
+    kept: list[str] = []
+    total = 0
+    for sentence in reversed(sentences):
+        sentence_length = alnum_length(sentence)
+        if kept and total + sentence_length > overlap:
+            break
+        kept.insert(0, sentence)
+        total += sentence_length
+        if total >= overlap:
+            break
+    return kept
+
+
+def _sentence_aware_split(
+    *,
+    text: str,
+    splitter: RecursiveCharacterTextSplitter,
+    chunk_size: int,
+    overlap: int,
+) -> list[str]:
+    """Build chunks with sentence boundaries when possible."""
+    raw_sentences = _split_into_sentences(text)
+    if not raw_sentences:
+        return []
+
+    normalized_sentences: list[str] = []
+    for sentence in raw_sentences:
+        if alnum_length(sentence) <= chunk_size:
+            normalized_sentences.append(sentence)
+            continue
+        normalized_sentences.extend(splitter.split_text(sentence))
+
+    chunks: list[str] = []
+    current_sentences: list[str] = []
+    current_length = 0
+
+    for sentence in normalized_sentences:
+        sentence_length = alnum_length(sentence)
+        if current_sentences and current_length + sentence_length > chunk_size:
+            chunks.append(" ".join(current_sentences).strip())
+            overlap_sentences = _trim_sentence_list_by_overlap(
+                current_sentences, overlap
+            )
+            current_sentences = list(overlap_sentences)
+            current_length = sum(alnum_length(item) for item in current_sentences)
+
+        current_sentences.append(sentence)
+        current_length += sentence_length
+
+    if current_sentences:
+        chunks.append(" ".join(current_sentences).strip())
+
+    return [chunk for chunk in chunks if chunk]
+
+
+def _split_non_table_text(
+    *,
+    splitter: RecursiveCharacterTextSplitter,
+    text_body: str,
+    chunk_size: int,
+    overlap: int,
+    page_num: int | None,
+    section_title: str | None,
+) -> list[Chunk]:
+    chunks: list[Chunk] = []
+    sentence_chunks = _sentence_aware_split(
+        text=text_body,
+        splitter=splitter,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
+    for split_text in sentence_chunks:
+        chunks.append(
+            Chunk(
+                text=split_text,
+                chunk_type="text",
+                page_num=page_num,
+                section_title=section_title,
+                index=0,
+            )
+        )
+    return chunks
+
+
+def _build_table_chunk(
+    *,
+    table_html: str,
+    preceding_line: str | None,
+    page_num: int | None,
+    section_title: str | None,
+) -> Chunk | None:
+    table_markdown = markdownify.markdownify(
+        table_html.strip(), heading_style="ATX"
+    ).strip()
+    if not table_markdown:
+        return None
+
+    table_text = (
+        f"{preceding_line}\n\n{table_markdown}" if preceding_line else table_markdown
+    )
+    return Chunk(
+        text=table_text,
+        chunk_type="table",
+        page_num=page_num,
+        section_title=section_title,
+        index=0,
+    )
+
+
 def chunk_markdown(
     text: str,
     *,
@@ -178,36 +345,26 @@ def chunk_markdown(
                 current_section = _extract_section(clean_text, current_section)
 
             if text_body:
-                for split_text in splitter.split_text(text_body):
-                    page_chunks.append(
-                        Chunk(
-                            text=split_text,
-                            chunk_type="text",
-                            page_num=page_num,
-                            section_title=current_section,
-                            index=0,
-                        )
+                page_chunks.extend(
+                    _split_non_table_text(
+                        splitter=splitter,
+                        text_body=text_body,
+                        chunk_size=chunk_size,
+                        overlap=overlap,
+                        page_num=page_num,
+                        section_title=current_section,
                     )
+                )
 
             if part_idx < len(tables):
-                table_markdown = markdownify.markdownify(
-                    tables[part_idx].strip(), heading_style="ATX"
-                ).strip()
-                if table_markdown:
-                    table_text = (
-                        f"{preceding_line}\n\n{table_markdown}"
-                        if preceding_line
-                        else table_markdown
-                    )
-                    page_chunks.append(
-                        Chunk(
-                            text=table_text,
-                            chunk_type="table",
-                            page_num=page_num,
-                            section_title=current_section,
-                            index=0,
-                        )
-                    )
+                table_chunk = _build_table_chunk(
+                    table_html=tables[part_idx],
+                    preceding_line=preceding_line,
+                    page_num=page_num,
+                    section_title=current_section,
+                )
+                if table_chunk is not None:
+                    page_chunks.append(table_chunk)
 
         for chunk in _merge_small_chunks(page_chunks):
             chunk.index = len(chunks)

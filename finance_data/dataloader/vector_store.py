@@ -15,6 +15,10 @@ from openai import OpenAI
 
 from finance_data.dataloader.text_splitter import Chunk, chunk_markdown
 from finance_data.dataloader.reranker import VllmRerankerClient
+from finance_data.dataloader.sparse_search_utils import (
+    build_bm25_index,
+    tokenize_for_bm25,
+)
 from finance_data.earnings_transcripts.transcripts import Transcript
 from finance_data.filings.models import SecFilingType
 from finance_data.settings import sec_settings
@@ -22,31 +26,8 @@ from finance_data.settings import sec_settings
 _log = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 2048
 _CHROMA_MISSING_PAGE_NUM = -1
-_BM25_K1 = 1.2  # term-frequency saturation
-_BM25_B = 0.75  # length normalisation (0 = none, 1 = full)
-CHUNK_SIZE = 2048
+CHUNK_SIZE = 1024
 CHUNK_OVERLAP = 256
-
-# ---------------------------------------------------------------------------
-# BM25 helpers (rank_bm25)
-# ---------------------------------------------------------------------------
-
-
-def _tokenize_for_bm25(text: str) -> list[str]:
-    return re.findall(r"\b\w+\b", text.lower())
-
-
-def _build_bm25_index(texts: list[str]) -> Any:
-    """Return a BM25Okapi index built from *texts* using project BM25 params."""
-    try:
-        from rank_bm25 import BM25Okapi
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(
-            "rank_bm25 is not installed. Install with `uv sync --group ocr-md`."
-        ) from exc
-
-    tokenized = [_tokenize_for_bm25(t) for t in texts]
-    return BM25Okapi(tokenized, k1=_BM25_K1, b=_BM25_B)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +259,7 @@ class ChromaVectorStore:
     def _embed_bm25(self, chunks: list[Chunk]) -> Any:
         """Build a rank_bm25 BM25Okapi index from *chunks* (in-memory)."""
         texts = [c.text for c in chunks]
-        return _build_bm25_index(texts)
+        return build_bm25_index(texts)
 
     def _build_chunk_records(
         self,
@@ -346,7 +327,7 @@ class ChromaVectorStore:
             )
 
         texts = [str(m.get("text", "")) for m in metadatas]
-        bm25_index = _build_bm25_index(texts)
+        bm25_index = build_bm25_index(texts)
         self._bm25_cache[key] = (bm25_index, metadatas)
         return bm25_index, metadatas
 
@@ -652,7 +633,7 @@ class ChromaVectorStore:
         """Rank chunks with rank_bm25 BM25Okapi scores (cache-backed, rebuilt on miss)."""
         bm25_index, metadatas = self._get_or_build_bm25_index(ticker, year, filing_type)
 
-        scores = bm25_index.get_scores(_tokenize_for_bm25(query))
+        scores = bm25_index.get_scores(tokenize_for_bm25(query))
         top_indices = np.argsort(scores)[-top_k:][::-1]
         max_score = float(scores[top_indices[0]]) if len(top_indices) else 0.0
         _log.info(f"{query=}, {len(metadatas)=}, {max_score=}")
@@ -704,9 +685,9 @@ class ChromaVectorStore:
         filing_type: SecFilingType | str,
         query: str,
         top_k: int = 5,
-        candidate_k: int = 200,
-        dense_weight: float = 0.7,
-        sparse_weight: float = 0.3,
+        candidate_k: int = 50,
+        dense_weight: float = 0.5,
+        sparse_weight: float = 0.5,
         rrf_k: int = 60,
     ) -> list[tuple[Chunk, float]]:
         """Run dense+sparse retrieval, fuse with RRF, then rerank with vLLM."""
