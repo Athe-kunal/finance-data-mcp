@@ -33,6 +33,7 @@ ocr-md = [
     "langchain-text-splitters>=0.3.0",
     "markdownify>=0.13.1",
     "rank-bm25>=0.2.2",
+    "nltk>=3.9.4",
 ]
 mcp = [
     "fastmcp>=3.1.1",
