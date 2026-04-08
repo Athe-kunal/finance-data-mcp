@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, Sequence
 
 from chromadb.types import Metadata
+from nltk.stem import PorterStemmer
 
 import chromadb
 import numpy as np
@@ -24,8 +25,45 @@ _EMBED_BATCH_SIZE = 2048
 _CHROMA_MISSING_PAGE_NUM = -1
 _BM25_K1 = 1.2  # term-frequency saturation
 _BM25_B = 0.75  # length normalisation (0 = none, 1 = full)
-CHUNK_SIZE = 2048
+CHUNK_SIZE = 1024
 CHUNK_OVERLAP = 256
+_STEMMER = PorterStemmer()
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "but",
+    "by",
+    "for",
+    "from",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "no",
+    "not",
+    "of",
+    "on",
+    "or",
+    "such",
+    "that",
+    "the",
+    "their",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "to",
+    "was",
+    "will",
+    "with",
+}
 
 # ---------------------------------------------------------------------------
 # BM25 helpers (rank_bm25)
@@ -33,7 +71,8 @@ CHUNK_OVERLAP = 256
 
 
 def _tokenize_for_bm25(text: str) -> list[str]:
-    return re.findall(r"\b\w+\b", text.lower())
+    tokens = re.findall(r"\b\w+\b", text.lower())
+    return [_STEMMER.stem(token) for token in tokens if token not in _STOPWORDS]
 
 
 def _build_bm25_index(texts: list[str]) -> Any:
@@ -704,9 +743,9 @@ class ChromaVectorStore:
         filing_type: SecFilingType | str,
         query: str,
         top_k: int = 5,
-        candidate_k: int = 200,
-        dense_weight: float = 0.7,
-        sparse_weight: float = 0.3,
+        candidate_k: int = 50,
+        dense_weight: float = 0.5,
+        sparse_weight: float = 0.5,
         rrf_k: int = 60,
     ) -> list[tuple[Chunk, float]]:
         """Run dense+sparse retrieval, fuse with RRF, then rerank with vLLM."""
