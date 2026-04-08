@@ -286,12 +286,12 @@ async def sec_main_to_markdown_and_embed_batch_endpoint(
     jobs = expand_sec_batch_jobs(request.requests)
     coroutines = [
         run_sec_markdown_embed_job(
-            ticker=ticker,
-            year=year,
-            filing_type=filing_type,
-            force=force,
+            ticker=job.ticker,
+            year=job.year,
+            filing_type=job.filing_type,
+            force=job.force,
         )
-        for ticker, year, filing_type, force in jobs
+        for job in jobs
     ]
     results = await run_jobs_with_limit(
         coroutines,
@@ -315,11 +315,11 @@ async def earnings_transcript_for_quarter_batch(
     jobs = expand_earnings_batch_jobs(request.requests)
     coroutines = [
         run_earnings_transcript_job(
-            ticker=ticker,
-            year=year,
-            quarter=quarter,
+            ticker=job.ticker,
+            year=job.year,
+            quarter=job.quarter,
         )
-        for ticker, year, quarter in jobs
+        for job in jobs
     ]
     results = await run_jobs_with_limit(
         coroutines,
