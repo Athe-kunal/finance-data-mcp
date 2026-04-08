@@ -67,10 +67,6 @@ def _extract_section(text: str, current_section: str | None) -> str | None:
     return current_section
 
 
-def _is_operator_speaker(speaker: str) -> bool:
-    return bool(_OPERATOR_SPEAKER_RE.search(speaker))
-
-
 def alnum_length(text: str) -> int:
     return sum(1 for c in text if c.isalnum())
 
@@ -380,16 +376,18 @@ def chunk_transcript_rows(
 ) -> list[Chunk]:
     """Create transcript chunks using RecursiveCharacterTextSplitter overlap.
 
-    Operator turns (speaker name matching 'operator') are not emitted as their
-    own chunks. Instead, their formatted text is buffered and prepended to the
-    first chunk of the following non-operator speaker, providing context for
-    what the operator said before the next participant speaks.
+    Rows whose alphanumeric length is below _MIN_CHUNK_LENGTH are not emitted
+    as standalone chunks. Instead they are buffered and prepended to the first
+    chunk of the next sufficiently-long row, keeping short context turns
+    (e.g. brief operator announcements) attached to the content that follows.
+    If no following row exists, the buffer is flushed as a final chunk so no
+    content is lost.
     """
     splitter = _build_splitter(chunk_size=chunk_size, overlap=overlap)
 
     chunks: list[Chunk] = []
     index = 0
-    pending_operator_text: str = ""
+    pending_text: str = ""
 
     for speaker, text in rows:
         clean_speaker = speaker.strip()
@@ -397,16 +395,15 @@ def chunk_transcript_rows(
         if not clean_text:
             continue
 
-        if _is_operator_speaker(clean_speaker):
-            operator_line = (
-                f"Speaker: {clean_speaker}\nText: {clean_text}"
-                if clean_speaker
-                else clean_text
-            )
-            pending_operator_text = (
-                f"{pending_operator_text}\n\n{operator_line}"
-                if pending_operator_text
-                else operator_line
+        row_line = (
+            f"Speaker: {clean_speaker}\nText: {clean_text}"
+            if clean_speaker
+            else clean_text
+        )
+
+        if alnum_length(clean_text) < _MIN_CHUNK_LENGTH:
+            pending_text = (
+                f"{pending_text}\n\n{row_line}" if pending_text else row_line
             )
             continue
 
@@ -414,9 +411,9 @@ def chunk_transcript_rows(
             chunk_text = (
                 f"Speaker: {clean_speaker}\nText: {part}" if clean_speaker else part
             )
-            if pending_operator_text and part_idx == 0:
-                chunk_text = f"{pending_operator_text}\n\n{chunk_text}"
-                pending_operator_text = ""
+            if pending_text and part_idx == 0:
+                chunk_text = f"{pending_text}\n\n{chunk_text}"
+                pending_text = ""
 
             chunks.append(
                 Chunk(
@@ -429,10 +426,10 @@ def chunk_transcript_rows(
             )
             index += 1
 
-    if pending_operator_text:
+    if pending_text:
         chunks.append(
             Chunk(
-                text=pending_operator_text,
+                text=pending_text,
                 chunk_type="text",
                 page_num=None,
                 section_title=None,
